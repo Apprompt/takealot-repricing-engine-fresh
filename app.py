@@ -6,7 +6,6 @@ import requests
 import time
 import random
 import hashlib
-import pandas as pd
 
 # Configure logging
 logging.basicConfig(
@@ -35,9 +34,21 @@ class TakealotRepricingEngine:
         """Load product-specific cost and selling prices"""
         try:
             if os.path.exists('products_config.csv'):
-                config_df = pd.read_csv('products_config.csv')
-                # Convert to dictionary for fast lookup: {offer_id: {cost_price: x, selling_price: y}}
-                config_dict = config_df.set_index('offer_id').to_dict('index')
+                # Simple CSV reading without pandas to avoid dependency issues
+                config_dict = {}
+                with open('products_config.csv', 'r') as f:
+                    lines = f.readlines()
+                    # Skip header
+                    for line in lines[1:]:
+                        parts = line.strip().split(',')
+                        if len(parts) >= 3:
+                            offer_id = parts[0]
+                            selling_price = int(parts[1]) if parts[1] else 700
+                            cost_price = int(parts[2]) if parts[2] else 500
+                            config_dict[offer_id] = {
+                                'selling_price': selling_price,
+                                'cost_price': cost_price
+                            }
                 logger.info(f"📊 Loaded configuration for {len(config_dict)} products")
                 return config_dict
             else:
