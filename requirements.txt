@@ -1,6 +1,5 @@
-"# CACHE BUST - 14-10-2025-1445 - FORCE FRESH BUILD" 
 "Flask==2.3.3" 
-"gunicorn==21.2.0" 
+"gunicorn==21.3.1" 
 "requests==2.31.0" 
 "beautifulsoup4==4.12.2" 
 "lxml==4.9.3" 
