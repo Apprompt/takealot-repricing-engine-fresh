@@ -31,40 +31,87 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine Initialized")
 
     def _load_product_config(self):
-        """Load product config with enhanced debugging"""
+        """Load product config with comprehensive debugging"""
         try:
-            if os.path.exists('products_config.csv'):
+            current_dir = os.getcwd()
+            logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
+            
+            # List all files in current directory
+            try:
+                files = os.listdir('.')
+                logger.info(f"📁 Files in directory ({len(files)} total): {files}")
+            except Exception as e:
+                logger.error(f"❌ Cannot list directory: {e}")
+            
+            file_path = 'products_config.csv'
+            logger.info(f"🔍 Looking for: {file_path}")
+            
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                logger.info(f"✅ products_config.csv FOUND! Size: {file_size} bytes")
+                
                 config_dict = {}
-                with open('products_config.csv', 'r') as f:
+                line_count = 0
+                with open(file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
-                    logger.info(f"📊 Reading products_config.csv - Total lines: {len(lines)}")
+                    line_count = len(lines)
+                    logger.info(f"📊 CSV has {line_count} lines (including header)")
                     
-                    # Skip header
+                    if line_count > 0:
+                        logger.info(f"📋 Header line: {lines[0].strip()}")
+                    
+                    # Process products (skip header)
                     for i, line in enumerate(lines[1:], 2):
                         parts = line.strip().split(',')
                         if len(parts) >= 3:
-                            offer_id = parts[0].strip()  # Ensure no whitespace
-                            selling_price = int(parts[1]) if parts[1].strip() else 700
-                            cost_price = int(parts[2]) if parts[2].strip() else 500
-                            config_dict[offer_id] = {
-                                'selling_price': selling_price,
-                                'cost_price': cost_price
-                            }
+                            offer_id = parts[0].strip()
+                            try:
+                                selling_price = int(parts[1].strip()) if parts[1].strip() else 700
+                                cost_price = int(parts[2].strip()) if parts[2].strip() else 500
+                                config_dict[offer_id] = {
+                                    'selling_price': selling_price,
+                                    'cost_price': cost_price
+                                }
+                            except ValueError as e:
+                                logger.warning(f"⚠️ Invalid price in line {i}: {line.strip()}")
                         
-                        # Log first few entries for verification
-                        if i <= 5:  # First 5 products
-                            logger.info(f"📋 Sample product {i-1}: ID='{offer_id}', cost={cost_price}, selling={selling_price}")
+                        # Log first 2 products for verification
+                        if i <= 3:
+                            logger.info(f"🎯 Sample product {i-1}: ID='{offer_id}', cost=R{cost_price}, selling=R{selling_price}")
                 
-                logger.info(f"✅ Successfully loaded {len(config_dict)} products from config")
-                if len(config_dict) == 0:
-                    logger.error("❌ CRITICAL: products_config.csv is EMPTY after loading!")
+                logger.info(f"🎉 SUCCESS: Loaded {len(config_dict)} products into config")
+                
+                # Verify specific product IDs we've seen in webhooks
+                test_ids = ['200474102', '208950987', '221935257']
+                for test_id in test_ids:
+                    if test_id in config_dict:
+                        logger.info(f"✅ CONFIRMED: Product {test_id} found in config")
+                    else:
+                        logger.warning(f"❌ MISSING: Product {test_id} NOT in config")
+                
                 return config_dict
             else:
-                logger.error("❌ CRITICAL: products_config.csv file not found!")
+                logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
+                # Try alternative paths
+                alternative_paths = [
+                    './products_config.csv',
+                    '/app/products_config.csv',
+                    'app/products_config.csv'
+                ]
+                for path in alternative_paths:
+                    if os.path.exists(path):
+                        logger.info(f"✅ Found at alternative path: {path}")
+                        break
+                    else:
+                        logger.info(f"❌ Not found at: {path}")
                 return {}
+                
         except Exception as e:
-            logger.error(f"❌ Failed to load product config: {e}")
+            logger.error(f"❌ CRITICAL ERROR loading product config: {e}")
+            import traceback
+            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return {}
+
 
     def get_product_thresholds(self, offer_id):
         """Get cost_price and selling_price for specific product"""
