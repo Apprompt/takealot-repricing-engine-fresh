@@ -22,33 +22,41 @@ class TakealotRepricingEngine:
     def __init__(self):
         self.session = requests.Session()
         self.price_cache = {}
-        self.cache_ttl = 3600  # 1 hour cache
+        self.cache_ttl = 3600
         self.last_request_time = 0
         self.min_request_interval = 2.5
-        
+
         # Load product configurations
         self.product_config = self._load_product_config()
         
         logger.info("🚀 Takealot Repricing Engine Initialized")
 
-    def _load_product_config(self):  # ✅ moved left by 1 tab
+    def _load_product_config(self):
         """Load product config with comprehensive debugging"""
         try:
             current_dir = os.getcwd()
             logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
-            
+
             # List all files in current directory
             try:
                 files = os.listdir('.')
                 logger.info(f"📁 Files in directory ({len(files)} total): {files}")
             except Exception as e:
                 logger.error(f"❌ Cannot list directory: {e}")
-            
+
             file_path = 'products_config.csv'
             logger.info(f"🔍 Looking for: {file_path}")
 
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
+                
+                # ✅ Optional safety check
+                expected_cols = {"OfferID", "SellingPrice", "CostPrice"}
+                missing = expected_cols - set(df.columns)
+                if missing:
+                    logger.error(f"❌ Missing columns in CSV: {missing}")
+                    return {}
+                
                 logger.info(f"✅ Loaded CSV successfully with {len(df)} rows and columns {list(df.columns)}")
 
                 config_dict = {
@@ -66,13 +74,11 @@ class TakealotRepricingEngine:
             else:
                 logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
                 return {}
-            
         except Exception as e:
             logger.error(f"❌ CRITICAL ERROR loading product config: {e}")
             import traceback
             logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return {}
-
 
     def get_product_thresholds(self, offer_id):
         """Get cost_price and selling_price for specific product"""
