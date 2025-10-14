@@ -60,11 +60,15 @@ class TakealotRepricingEngine:
 
     def get_product_thresholds(self, offer_id):
         """Get cost_price and selling_price for specific product"""
-        if offer_id in self.product_config:
-            config = self.product_config[offer_id]
+        # Convert to string for lookup (since CSV keys are strings)
+        offer_id_str = str(offer_id)
+
+
+        if offer_id_str in self.product_config:
+            config = self.product_config[offer_id_str]
             return config.get('cost_price'), config.get('selling_price')
         else:
-            # Fallback - you should set sensible defaults or handle missing products
+            logger.warning(f"⚠️ No configuration found for '{offer_id_str}' - using fallback")
             logger.warning(f"⚠️ No configuration found for {offer_id}, using fallback")
             return 500, 700  # Fallback values (WHOLE NUMBERS)
 
@@ -158,19 +162,20 @@ class TakealotRepricingEngine:
         self.last_request_time = time.time()
 
     def _simulate_scraping(self, offer_id):
-        """Simulate web scraping - replace with actual implementation"""
         time.sleep(1)  # Simulate scraping delay
-        # Generate realistic mock price based on offer_id
-        hash_obj = hashlib.md5(offer_id.encode())
+        # Convert offer_id to string to handle both string and integer IDs
+        offer_id_str = str(offer_id)
+        hash_obj = hashlib.md5(offer_id_str.encode())
         hash_int = int(hash_obj.hexdigest()[:8], 16)
         base_price = 450 + (hash_int % 200)  # Prices between 450-650 (WHOLE NUMBERS)
         return float(base_price)
 
     def _get_fallback_price(self, offer_id):
-        """Fallback when scraping fails"""
-        hash_obj = hashlib.md5(offer_id.encode())
+        # Convert offer_id to string
+        offer_id_str = str(offer_id)
+        hash_obj = hashlib.md5(offer_id_str.encode())
         hash_int = int(hash_obj.hexdigest()[:8], 16)
-        fallback_price = 500 + (hash_int % 100)  # 500-600 range (WHOLE NUMBERS)
+        fallback_price = 500 + (hash_int % 100)
         logger.warning(f"🔄 Using fallback price: R{fallback_price}")
         return float(fallback_price)
 
