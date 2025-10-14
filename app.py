@@ -31,28 +31,36 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine Initialized")
 
     def _load_product_config(self):
-        """Load product-specific cost and selling prices"""
+        """Load product config with enhanced debugging"""
         try:
             if os.path.exists('products_config.csv'):
-                # Simple CSV reading without pandas to avoid dependency issues
                 config_dict = {}
                 with open('products_config.csv', 'r') as f:
                     lines = f.readlines()
+                    logger.info(f"📊 Reading products_config.csv - Total lines: {len(lines)}")
+                    
                     # Skip header
-                    for line in lines[1:]:
+                    for i, line in enumerate(lines[1:], 2):
                         parts = line.strip().split(',')
                         if len(parts) >= 3:
-                            offer_id = parts[0]
-                            selling_price = int(parts[1]) if parts[1] else 700
-                            cost_price = int(parts[2]) if parts[2] else 500
+                            offer_id = parts[0].strip()  # Ensure no whitespace
+                            selling_price = int(parts[1]) if parts[1].strip() else 700
+                            cost_price = int(parts[2]) if parts[2].strip() else 500
                             config_dict[offer_id] = {
                                 'selling_price': selling_price,
                                 'cost_price': cost_price
                             }
-                logger.info(f"📊 Loaded configuration for {len(config_dict)} products")
+                        
+                        # Log first few entries for verification
+                        if i <= 5:  # First 5 products
+                            logger.info(f"📋 Sample product {i-1}: ID='{offer_id}', cost={cost_price}, selling={selling_price}")
+                
+                logger.info(f"✅ Successfully loaded {len(config_dict)} products from config")
+                if len(config_dict) == 0:
+                    logger.error("❌ CRITICAL: products_config.csv is EMPTY after loading!")
                 return config_dict
             else:
-                logger.warning("⚠️ products_config.csv not found - using fallback pricing")
+                logger.error("❌ CRITICAL: products_config.csv file not found!")
                 return {}
         except Exception as e:
             logger.error(f"❌ Failed to load product config: {e}")
@@ -66,10 +74,13 @@ class TakealotRepricingEngine:
 
         if offer_id_str in self.product_config:
             config = self.product_config[offer_id_str]
+            logger.info(f"✅ Found config for {offer_id_str}: cost R{config.get('cost_price')}, selling R{config.get('selling_price')}")
             return config.get('cost_price'), config.get('selling_price')
         else:
-            logger.warning(f"⚠️ No configuration found for '{offer_id_str}' - using fallback")
-            logger.warning(f"⚠️ No configuration found for {offer_id}, using fallback")
+            logger.warning(f"⚠️ No configuration found for '{offer_id_str}' - using fallback R500/R700")
+            # Log first few product IDs for debugging
+            sample_ids = list(self.product_config.keys())[:3]
+            logger.info(f"📋 Sample configured IDs: {sample_ids}")
             return 500, 700  # Fallback values (WHOLE NUMBERS)
 
     def get_competitor_price(self, offer_id):
@@ -201,7 +212,17 @@ def handle_price_change():
         logger.info(f"📥 Webhook received: {webhook_data}")
         
         offer_id = webhook_data.get('offer_id')
-        my_current_price = float(webhook_data.get('my_current_price', 0))
+        
+        # Extract YOUR current price from values_changed
+        values_changed = webhook_data.get('values_changed', '{}')
+        try:
+            values_dict = json.loads(values_changed)
+            # Get your NEW selling price from the webhook
+            my_current_price = values_dict.get('selling_price', {}).get('new_value', 0)
+        except:
+            my_current_price = 0  # Fallback
+        
+        logger.info(f"💰 Extracted - Offer: {offer_id}, My Price: R{my_current_price}")
         
         if not offer_id:
             return jsonify({'error': 'Missing offer_id'}), 400
