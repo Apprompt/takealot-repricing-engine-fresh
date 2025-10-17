@@ -157,91 +157,59 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def _extract_lowest_competitor_price(self, html_content, offer_id):
-        """TARGETED approach - specifically look for competitor price range"""
+        """Extract lowest competitor price by first checking embedded JSON"""
         try:
-            import re
+            import re, json
             from bs4 import BeautifulSoup
-            
+
             soup = BeautifulSoup(html_content, 'html.parser')
             all_prices = []
-            
-            logger.info("🎯 TARGETED scraping for competitor price R452...")
-            
-            # STRATEGY: Extract ALL prices and filter for competitor range
-            all_text_elements = soup.find_all(string=re.compile(r'R\s*\d+'))
-            
-            for element in all_text_elements:
-                text = element.get_text().strip()
-                price_matches = re.findall(r'R\s*(\d+)', text)
-                
-                for match in price_matches:
-                    price = float(match)
-                    
-                    # FILTER: Only consider prices in competitor range (400-600)
-                    # This excludes your price (743) and very low/high prices
-                    if 400 <= price <= 600:
-                        all_prices.append(price)
-                        
-                        # Log the context to understand what we're finding
-                        parent_html = str(element.parent)[:150] if element.parent else "No parent"
-                        logger.info(f"🔍 Found potential competitor price: R{price} in context: {parent_html}")
-            
-            # Also look for "Other Sellers" or similar sections specifically
-            competitor_sections = soup.find_all(string=re.compile(r'other|seller|competitor|marketplace', re.IGNORECASE))
-            for section_text in competitor_sections:
-                # Extract prices from competitor sections
-                if section_text.parent:
-                    competitor_prices = self._extract_prices_from_element(section_text.parent)
-                    # Filter for competitor range
-                    competitor_prices = [p for p in competitor_prices if 400 <= p <= 600]
-                    all_prices.extend(competitor_prices)
-                    if competitor_prices:
-                        logger.info(f"🏪 Found prices in competitor section: {competitor_prices}")
-            
-            # Remove duplicates and sort
-            unique_prices = sorted(list(set(all_prices)))
-            logger.info(f"📊 Filtered competitor prices (400-600 range): {unique_prices}")
-            
-            # Return the LOWEST price in competitor range
-            if unique_prices:
-                lowest_competitor = unique_prices[0]
-                logger.info(f"🏆 Selected competitor price: R{lowest_competitor}")
-                return lowest_competitor
-            
-            # If no prices in competitor range, try broader range
-            logger.info("🔄 No prices in 400-600 range, trying broader search...")
-            all_prices_broad = []
-            for element in all_text_elements:
-                text = element.get_text().strip()
-                price_matches = re.findall(r'R\s*(\d+)', text)
-                for match in price_matches:
-                    price = float(match)
-                    if 100 < price < 800:  # Broader range
-                        all_prices_broad.append(price)
-            
-            unique_broad = sorted(list(set(all_prices_broad)))
-            logger.info(f"📊 All prices in broader range: {unique_broad}")
-            
-            if unique_broad:
-                # Try to exclude your price (743) and pick the lowest
-                competitor_candidates = [p for p in unique_broad if p != 743]
-                if competitor_candidates:
-                    lowest = min(competitor_candidates)
-                    logger.info(f"🏆 Selected from broader range: R{lowest}")
-                    return lowest
-                else:
-                    lowest = unique_broad[0]
-                    logger.info(f"🏆 Only price found: R{lowest}")
-                    return lowest
-            
-            logger.info("❌ No suitable prices found")
-            return None
-            
+
+            # STEP 1️⃣: Try to find JSON embedded in <script> tags
+            script_tags = soup.find_all('script')
+            for tag in script_tags:
+                if not tag.string:
+                    continue
+                text = tag.string.strip()
+                # Look for Takealot JSON object containing "price"
+                if '"price"' in text and 'PLID' in text:
+                    try:
+                        json_matches = re.findall(r'\{.*?"price":.*?\}', text)
+                        for match in json_matches:
+                            data = json.loads(match)
+                            price_cents = data.get("price")
+                            if price_cents:
+                                price_rands = round(float(price_cents) / 100.0, 2)
+                                all_prices.append(price_rands)
+                                logger.info(f"💰 Found price from embedded JSON: R{price_rands}")
+                    except Exception as e:
+                        continue
+
+            # STEP 2️⃣: Fallback — check visible text like "R 452"
+            if not all_prices:
+                logger.info("⚠️ No embedded JSON prices found — falling back to visible text")
+                all_text_elements = soup.find_all(string=re.compile(r'R\s*\d+'))
+                for element in all_text_elements:
+                    matches = re.findall(r'R\s*(\d+)', element)
+                    for m in matches:
+                        price = float(m)
+                        if 100 < price < 10000:
+                            all_prices.append(price)
+
+            if all_prices:
+                lowest = min(all_prices)
+                logger.info(f"🏆 Selected lowest competitor price: R{lowest}")
+                return lowest
+            else:
+                logger.warning("❌ No price found in HTML or JSON")
+                return None
+
         except Exception as e:
             logger.error(f"❌ Price extraction failed: {e}")
             import traceback
-            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
+            logger.error(traceback.format_exc())
             return None
+
 
     def _extract_prices_from_element(self, element):
         """Extract prices from a BeautifulSoup element"""
