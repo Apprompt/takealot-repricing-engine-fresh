@@ -126,19 +126,19 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Extract the LOWEST competitor price from Takealot - FIXED VERSION"""
+        """Extract the LOWEST competitor price from Takealot - FIXED URL"""
         try:
             self._respect_rate_limit()
             
-            # Takealot product URL with proper slug
-            url = f"https://www.takealot.com/plid{offer_id}"
+            # ✅ CORRECT Takealot URL format with /x/ path
+            url = f"https://www.takealot.com/x/plid{offer_id}"
             
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             }
             
-            logger.info(f"🌐 Scraping REAL competitor price from: {url}")
+            logger.info(f"🌐 Scraping REAL competitor price from CORRECT URL: {url}")
             response = self.session.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             
