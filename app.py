@@ -129,7 +129,7 @@ class TakealotRepricingEngine:
         """Fetch lowest competitor price directly from Takealot's JSON API"""
         try:
             self._respect_rate_limit()
-            api_url = f"https://api.takealot.com/rest/v-1-9-0/product-details/PLID{offer_id}"
+            api_url = f"https://api.takealot.com/rest/v-2-0-0/product-details/PLID{offer_id}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 "Accept": "application/json",
