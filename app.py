@@ -156,58 +156,46 @@ class TakealotRepricingEngine:
             logger.error(f"❌ Real scraping failed: {e}")
             return self._get_fallback_price(offer_id)
 
-    def _extract_lowest_competitor_price(self, html_content, offer_id):
-        """Parse embedded JSON (__NEXT_DATA__) to get the lowest live competitor price."""
+    def get_real_competitor_price(self, offer_id):
+        """Fetch lowest competitor price directly from Takealot's JSON API"""
         try:
-            import json, re
-            from bs4 import BeautifulSoup
+            self._respect_rate_limit()
+            api_url = f"https://api.takealot.com/rest/v-1-9-0/product-details/PLID{offer_id}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "application/json",
+            }
+            logger.info(f"🌐 Fetching Takealot API: {api_url}")
 
-            soup = BeautifulSoup(html_content, 'html.parser')
-            next_data_script = soup.find("script", {"id": "__NEXT_DATA__"})
+            response = self.session.get(api_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
 
-            if not next_data_script or not next_data_script.string:
-                logger.warning("⚠️ __NEXT_DATA__ script not found")
-                return None
-
-            data = json.loads(next_data_script.string)
-
-            # Safely navigate down to the product JSON object
-            product = (
-                data.get("props", {})
-                    .get("pageProps", {})
-                    .get("product", {})
-            )
-
-            offer_list = product.get("offerList", [])
+            product = data.get("product", {})
+            offers = product.get("offers", []) or product.get("offerList", [])
             prices = []
 
-            # Collect all valid prices from offerList
-            for offer in offer_list:
+            for offer in offers:
                 price_cents = offer.get("price")
                 if isinstance(price_cents, (int, float)) and price_cents > 0:
-                    price_rands = round(price_cents / 100.0, 2)
-                    prices.append(price_rands)
-                    logger.info(f"💰 Found offer price: R{price_rands} from seller {offer.get('seller', 'unknown')}")
+                    prices.append(price_cents / 100.0)
 
-            # Fallback: also include main product.sellingPrice if offers missing
-            if not prices and "sellingPrice" in product:
-                price_rands = round(product["sellingPrice"] / 100.0, 2)
-                prices.append(price_rands)
-                logger.info(f"💰 Found main selling price: R{price_rands}")
+            # Include buybox or main selling price if missing
+            buybox_price = product.get("buybox", {}).get("price") or product.get("sellingPrice")
+            if buybox_price:
+                prices.append(buybox_price / 100.0)
 
             if prices:
-                lowest = min(prices)
-                logger.info(f"🏆 Lowest competitor price from JSON: R{lowest}")
+                lowest = round(min(prices), 2)
+                logger.info(f"🏆 Lowest competitor price from JSON API: R{lowest}")
                 return lowest
-
-            logger.warning("❌ No price fields found in offerList or sellingPrice")
-            return None
+            else:
+                logger.warning("⚠️ No valid prices found in JSON API response")
+                return self._get_fallback_price(offer_id)
 
         except Exception as e:
-            logger.error(f"❌ JSON extraction failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+            logger.error(f"❌ Failed to fetch from JSON API: {e}")
+            return self._get_fallback_price(offer_id)
 
 
     def _extract_prices_from_element(self, element):
