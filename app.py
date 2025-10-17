@@ -453,15 +453,69 @@ class TakealotRepricingEngine:
         return new_price
 
     def update_price(self, offer_id, new_price):
-        """Update price on Takealot (simulated)"""
+        """Update price on Takealot using REAL API calls"""
         try:
-            logger.info(f"📤 Updating {offer_id} to R{new_price}")
-            # Simulate API call
-            time.sleep(0.5)
-            return True
+            # Get API credentials from environment variables
+            api_key = os.getenv('TAKEALOT_API_KEY')
+            api_secret = os.getenv('TAKEALOT_API_SECRET')
+            
+            if not api_key or not api_secret:
+                logger.error("❌ Missing Takealot API credentials")
+                return False
+            
+            # Takealot API endpoint for price updates
+            api_url = "https://api.takealot.com/v1/sellerlistings/update"
+            
+            # Prepare the request payload
+            payload = {
+                "seller_listings": [{
+                    "offer_id": str(offer_id),
+                    "selling_price": int(new_price)  # Takealot expects whole numbers
+                }]
+            }
+            
+            headers = {
+                "Content-Type": "application/json",
+                "X-Api-Key": api_key,
+                "X-Api-Secret": api_secret,
+            }
+            
+            logger.info(f"📤 Updating {offer_id} to R{new_price} via Takealot API")
+            
+            # Make the API call
+            response = self.session.put(api_url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                logger.info(f"✅ Successfully updated {offer_id} to R{new_price}")
+                return True
+            else:
+                logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
+                return False
+                
         except Exception as e:
             logger.error(f"❌ Price update failed: {e}")
+            import traceback
+            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return False
+
+    def update_price_with_retry(self, offer_id, new_price, max_retries=3):
+        """Update price with retry logic for reliability"""
+        for attempt in range(max_retries):
+            try:
+                success = self.update_price(offer_id, new_price)
+                if success:
+                    return True
+                else:
+                    logger.warning(f"🔄 Update attempt {attempt + 1} failed, retrying...")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+            except Exception as e:
+                logger.error(f"❌ Update attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+        
+        logger.error(f"❌ All {max_retries} update attempts failed for {offer_id}")
+        return False
+
 
     def _get_cached_price(self, offer_id):
         if offer_id in self.price_cache:
@@ -543,82 +597,106 @@ def home():
         'features': 'PROACTIVE MONITORING + Instant Webhook Responses'
     })
 
-@app.route('/webhook/price-change', methods=['POST'])
-def handle_price_change():
-    """Main webhook endpoint - NOW WITH INSTANT PRICING"""
-    try:
-        webhook_data = request.get_json()
-        logger.info(f"📥 Webhook received: {webhook_data}")
-        
-        # 🚨 DEBUG: Log ALL webhook fields to see available data
-        logger.info(f"🔍 WEBHOOK ALL KEYS: {list(webhook_data.keys())}")
-        
-        offer_id = webhook_data.get('offer_id')
-        
-        # Extract YOUR current price from values_changed
-        values_changed = webhook_data.get('values_changed', '{}')
-        my_current_price = 0
-        
+    @app.route('/webhook/price-change', methods=['POST'])
+    def handle_price_change():
+        """Main webhook endpoint - WITH SECURITY VERIFICATION & INSTANT PRICING"""
         try:
-            if isinstance(values_changed, str):
-                values_dict = json.loads(values_changed)
-            else:
-                values_dict = values_changed
+            # Verify webhook signature if secret is provided
+            webhook_secret = os.getenv('TAKEALOT_WEBHOOK_SECRET')
+            if webhook_secret:
+                signature = request.headers.get('X-Takealot-Signature')
+                if not signature:
+                    logger.warning("⚠️ Missing webhook signature")
+                    return jsonify({'error': 'Missing signature'}), 401
                 
-            # Get your NEW selling price from the webhook
-            my_current_price = values_dict.get('selling_price', {}).get('new_value', 0)
-            if not my_current_price:
-                # Try alternative field names
-                my_current_price = values_dict.get('current_price') or values_dict.get('price') or 0
-        except Exception as e:
-            logger.error(f"❌ Failed to extract my price: {e}")
+                # Verify the signature (you may need to adjust this based on Takealot's method)
+                import hmac
+                import hashlib
+                
+                # Calculate expected signature
+                expected_signature = hmac.new(
+                    webhook_secret.encode(),
+                    request.get_data(),
+                    hashlib.sha256
+                ).hexdigest()
+                
+                if not hmac.compare_digest(signature, expected_signature):
+                    logger.warning("❌ Invalid webhook signature")
+                    return jsonify({'error': 'Invalid signature'}), 401
+
+            # Continue with webhook processing
+            webhook_data = request.get_json()
+            logger.info(f"📥 Webhook received: {webhook_data}")
+            
+            # 🚨 DEBUG: Log ALL webhook fields to see available data
+            logger.info(f"🔍 WEBHOOK ALL KEYS: {list(webhook_data.keys())}")
+            
+            offer_id = webhook_data.get('offer_id')
+            
+            # Extract YOUR current price from values_changed
+            values_changed = webhook_data.get('values_changed', '{}')
             my_current_price = 0
-        
-        logger.info(f"💰 Extracted - Offer: {offer_id}, My Price: R{my_current_price}")
-        
-        if not offer_id:
-            return jsonify({'error': 'Missing offer_id'}), 400
-        
-        # 🎯 INSTANT competitor price lookup
-        competitor_price, source = engine.get_competitor_price_instant(offer_id)
-        
-        logger.info(f"🎉 USING {source.upper()} COMPETITOR DATA: R{competitor_price}")
-        
-        # Calculate optimal price using your business logic
-        optimal_price = engine.calculate_optimal_price(my_current_price, competitor_price, offer_id)
-        
-        # Determine if update is needed
-        needs_update = optimal_price != my_current_price
-        
-        if needs_update:
-            update_success = engine.update_price(offer_id, optimal_price)
-            status = 'updated' if update_success else 'update_failed'
-        else:
-            update_success = False
-            status = 'no_change'
-        
-        response = {
-            'status': status,
-            'offer_id': offer_id,
-            'your_current_price': int(my_current_price),
-            'competitor_price': int(competitor_price),
-            'competitor_source': source,
-            'calculated_price': optimal_price,
-            'price_updated': update_success,
-            'business_rule': describe_business_rule(my_current_price, competitor_price, optimal_price),
-            'response_time': 'INSTANT' if source == 'proactive_monitoring' else 'SLOW',
-            'timestamp': datetime.now().isoformat(),
-            'webhook_fields_found': list(webhook_data.keys())
-        }
-        
-        logger.info(f"📤 Webhook response: {response}")
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
-        import traceback
-        logger.error(f"❌ Stack trace: {traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
+            
+            try:
+                if isinstance(values_changed, str):
+                    values_dict = json.loads(values_changed)
+                else:
+                    values_dict = values_changed
+                    
+                # Get your NEW selling price from the webhook
+                my_current_price = values_dict.get('selling_price', {}).get('new_value', 0)
+                if not my_current_price:
+                    # Try alternative field names
+                    my_current_price = values_dict.get('current_price') or values_dict.get('price') or 0
+            except Exception as e:
+                logger.error(f"❌ Failed to extract my price: {e}")
+                my_current_price = 0
+            
+            logger.info(f"💰 Extracted - Offer: {offer_id}, My Price: R{my_current_price}")
+            
+            if not offer_id:
+                return jsonify({'error': 'Missing offer_id'}), 400
+            
+            # 🎯 INSTANT competitor price lookup
+            competitor_price, source = engine.get_competitor_price_instant(offer_id)
+            
+            logger.info(f"🎉 USING {source.upper()} COMPETITOR DATA: R{competitor_price}")
+            
+            # Calculate optimal price using your business logic
+            optimal_price = engine.calculate_optimal_price(my_current_price, competitor_price, offer_id)
+            
+            # Determine if update is needed
+            needs_update = optimal_price != my_current_price
+            
+            if needs_update:
+                update_success = engine.update_price_with_retry(offer_id, optimal_price)
+                status = 'updated' if update_success else 'update_failed'
+            else:
+                update_success = False
+                status = 'no_change'
+            
+            response = {
+                'status': status,
+                'offer_id': offer_id,
+                'your_current_price': int(my_current_price),
+                'competitor_price': int(competitor_price),
+                'competitor_source': source,
+                'calculated_price': optimal_price,
+                'price_updated': update_success,
+                'business_rule': describe_business_rule(my_current_price, competitor_price, optimal_price),
+                'response_time': 'INSTANT' if source == 'proactive_monitoring' else 'SLOW',
+                'timestamp': datetime.now().isoformat(),
+                'webhook_fields_found': list(webhook_data.keys())
+            }
+            
+            logger.info(f"📤 Webhook response: {response}")
+            return jsonify(response)
+            
+        except Exception as e:
+            logger.error(f"❌ Webhook error: {e}")
+            import traceback
+            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
+            return jsonify({'error': str(e)}), 500
 
 @app.route('/test/<offer_id>')
 def test_endpoint(offer_id):
@@ -788,3 +866,23 @@ if __name__ == '__main__':
     monitoring_thread.start()
     
     app.run(host='0.0.0.0', port=port, debug=False)
+
+@app.route('/test-update/<offer_id>/<int:new_price>')
+def test_price_update(offer_id, new_price):
+    """Safe test endpoint for price updates (use small changes for testing)"""
+    try:
+        # Safety check - don't allow huge price changes in test
+        current_test_price = 500  # Mock current price for testing
+        if abs(new_price - current_test_price) > 100:
+            return jsonify({'error': 'Price change too large for test'}), 400
+        
+        success = engine.update_price_with_retry(offer_id, new_price)
+        
+        return jsonify({
+            'offer_id': offer_id,
+            'new_price': new_price,
+            'update_success': success,
+            'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
