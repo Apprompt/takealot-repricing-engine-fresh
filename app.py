@@ -603,6 +603,65 @@ def debug_scraping(offer_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+        @app.route('/debug-page-content/<offer_id>')
+        def debug_page_content(offer_id):
+            """Get raw page content to analyze Takealot's structure"""
+            try:
+                import requests
+                from bs4 import BeautifulSoup
+                
+                url = f"https://www.takealot.com/x/plid{offer_id}"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Find ALL elements that contain "R" and numbers (potential prices)
+                price_elements = []
+                elements_with_r = soup.find_all(string=lambda text: text and 'R' in text and any(c.isdigit() for c in text))
+                
+                for element in elements_with_r:
+                    text = element.strip()
+                    # Get some context
+                    parent_class = element.parent.get('class', []) if element.parent else []
+                    parent_id = element.parent.get('id', '') if element.parent else ''
+                    
+                    price_elements.append({
+                        'text': text,
+                        'parent_class': parent_class,
+                        'parent_id': parent_id,
+                        'full_context': str(element.parent)[:300] + '...' if element.parent else 'No parent'
+                    })
+                
+                # Also check for specific competitor sections
+                competitor_keywords = ['other', 'seller', 'competitor', 'marketplace', 'multiple', 'offer']
+                competitor_sections = []
+                
+                for keyword in competitor_keywords:
+                    elements = soup.find_all(string=lambda text: text and keyword in text.lower())
+                    for element in elements:
+                        competitor_sections.append({
+                            'keyword': keyword,
+                            'text': element.strip()[:100],
+                            'context': str(element.parent)[:200] + '...' if element.parent else 'No parent'
+                        })
+                
+                return jsonify({
+                    'offer_id': offer_id,
+                    'url': url,
+                    'price_elements_found': price_elements[:20],  # First 20 to avoid huge response
+                    'competitor_sections_found': competitor_sections[:10],
+                    'total_price_elements': len(price_elements),
+                    'page_title': soup.title.string if soup.title else 'No title'
+                })
+                
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500        
+
 def describe_business_rule(my_price, competitor_price, optimal_price):
     """Describe which business rule was applied"""
     # Get thresholds for the specific product (simplified for this function)
