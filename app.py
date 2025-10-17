@@ -157,50 +157,54 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def _extract_lowest_competitor_price(self, html_content, offer_id):
-        """Extract lowest competitor price from Takealot /x/plid... JSON structure"""
+        """Parse embedded JSON (__NEXT_DATA__) to get the lowest live competitor price."""
         try:
-            import re, json
+            import json, re
             from bs4 import BeautifulSoup
 
             soup = BeautifulSoup(html_content, 'html.parser')
-            all_prices = []
-
-            # 1️⃣ Extract embedded JSON from <script id="__NEXT_DATA__">
             next_data_script = soup.find("script", {"id": "__NEXT_DATA__"})
-            if next_data_script and next_data_script.string:
-                try:
-                    data = json.loads(next_data_script.string)
-                    # Navigate safely to find any numeric "price" values
-                    json_text = json.dumps(data)
-                    matches = re.findall(r'"price"\s*:\s*(\d+)', json_text)
-                    for match in matches:
-                        price_cents = int(match)
-                        price_rands = round(price_cents / 100.0, 2)
-                        all_prices.append(price_rands)
-                        logger.info(f"💰 Extracted price from __NEXT_DATA__: R{price_rands}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to parse __NEXT_DATA__ JSON: {e}")
 
-            # 2️⃣ If no JSON prices, fallback to visible text pattern
-            if not all_prices:
-                logger.info("⚠️ No JSON prices found — fallback to visible text scan")
-                text_matches = re.findall(r'R\s*(\d+)', html_content)
-                for match in text_matches:
-                    price = float(match)
-                    if 100 < price < 10000:
-                        all_prices.append(price)
-
-            # 3️⃣ Select lowest reasonable price
-            if all_prices:
-                lowest = min(all_prices)
-                logger.info(f"🏆 Final lowest competitor price selected: R{lowest}")
-                return lowest
-            else:
-                logger.warning("❌ No prices found at all in HTML/JSON")
+            if not next_data_script or not next_data_script.string:
+                logger.warning("⚠️ __NEXT_DATA__ script not found")
                 return None
 
+            data = json.loads(next_data_script.string)
+
+            # Safely navigate down to the product JSON object
+            product = (
+                data.get("props", {})
+                    .get("pageProps", {})
+                    .get("product", {})
+            )
+
+            offer_list = product.get("offerList", [])
+            prices = []
+
+            # Collect all valid prices from offerList
+            for offer in offer_list:
+                price_cents = offer.get("price")
+                if isinstance(price_cents, (int, float)) and price_cents > 0:
+                    price_rands = round(price_cents / 100.0, 2)
+                    prices.append(price_rands)
+                    logger.info(f"💰 Found offer price: R{price_rands} from seller {offer.get('seller', 'unknown')}")
+
+            # Fallback: also include main product.sellingPrice if offers missing
+            if not prices and "sellingPrice" in product:
+                price_rands = round(product["sellingPrice"] / 100.0, 2)
+                prices.append(price_rands)
+                logger.info(f"💰 Found main selling price: R{price_rands}")
+
+            if prices:
+                lowest = min(prices)
+                logger.info(f"🏆 Lowest competitor price from JSON: R{lowest}")
+                return lowest
+
+            logger.warning("❌ No price fields found in offerList or sellingPrice")
+            return None
+
         except Exception as e:
-            logger.error(f"❌ Competitor price extraction failed: {e}")
+            logger.error(f"❌ JSON extraction failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None
