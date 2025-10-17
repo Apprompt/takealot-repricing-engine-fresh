@@ -53,7 +53,7 @@ class PriceMonitor:
                 INSERT OR REPLACE INTO competitor_prices 
                 (offer_id, competitor_price, last_updated, source)
                 VALUES (?, ?, ?, ?)
-            ''', (str(offer_id), price, datetime.now(), source))
+            ''', (str(offer_id), price, datetime.now().isoformat(), source))
             conn.commit()
             conn.close()
             logger.info(f"💾 Stored competitor price for {offer_id}: R{price}")
@@ -78,14 +78,18 @@ class PriceMonitor:
             if result:
                 price, last_updated, source = result
                 # Check if data is fresh (less than 1 hour old)
-                last_time = datetime.fromisoformat(last_updated)
-                time_diff = (datetime.now() - last_time).total_seconds()
-                
-                if time_diff < 3600:  # 1 hour freshness
-                    logger.info(f"💾 Using FRESH stored competitor price for {offer_id}: R{price} (from {source})")
-                    return price
-                else:
-                    logger.info(f"🔄 Stored price too old ({int(time_diff/60)} minutes)")
+                try:
+                    last_time = datetime.fromisoformat(last_updated)
+                    time_diff = (datetime.now() - last_time).total_seconds()
+                    
+                    if time_diff < 3600:  # 1 hour freshness
+                        logger.info(f"💾 Using FRESH stored competitor price for {offer_id}: R{price} (from {source})")
+                        return price
+                    else:
+                        logger.info(f"🔄 Stored price too old ({int(time_diff/60)} minutes)")
+                        return None
+                except Exception as e:
+                    logger.error(f"❌ Error parsing timestamp: {e}")
                     return None
             return None
         except Exception as e:
@@ -114,6 +118,8 @@ class PriceMonitor:
                 logger.info(f"🔄 Monitoring cycle started for {len(product_list)} products")
                 
                 for offer_id in product_list:
+                    if not self.is_monitoring:
+                        break
                     try:
                         # Use existing scraping method to get competitor price
                         competitor_price = engine.get_competitor_price(offer_id)
@@ -125,12 +131,14 @@ class PriceMonitor:
                         logger.error(f"❌ Monitoring failed for {offer_id}: {e}")
                         time.sleep(5)  # Longer delay on error
                 
-                logger.info(f"⏰ Monitoring cycle completed. Sleeping for {interval_minutes} minutes")
-                time.sleep(interval_minutes * 60)  # Convert to seconds
+                if self.is_monitoring:
+                    logger.info(f"⏰ Monitoring cycle completed. Sleeping for {interval_minutes} minutes")
+                    time.sleep(interval_minutes * 60)  # Convert to seconds
                 
             except Exception as e:
                 logger.error(f"❌ Monitoring loop error: {e}")
-                time.sleep(60)  # Wait a minute before retrying
+                if self.is_monitoring:
+                    time.sleep(60)  # Wait a minute before retrying
     
     def stop_monitoring(self):
         """Stop background monitoring"""
@@ -400,11 +408,18 @@ def extract_competitor_from_webhook(webhook_data, offer_id):
 # Initialize the engine
 engine = TakealotRepricingEngine()
 
-# Start background monitoring when app starts
-@app.before_first_request
+# Start background monitoring when app starts (using modern Flask approach)
+@app.before_request
 def start_background_services():
-    engine.start_background_monitoring()
-    logger.info("🚀 Background monitoring service started")
+    if not hasattr(app, 'background_services_started'):
+        # Start monitoring in a separate thread to avoid blocking
+        def start_monitoring():
+            time.sleep(5)  # Wait a bit for app to fully start
+            engine.start_background_monitoring()
+        
+        monitoring_thread = threading.Thread(target=start_monitoring, daemon=True)
+        monitoring_thread.start()
+        app.background_services_started = True
 
 @app.route('/')
 def home():
@@ -629,4 +644,13 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting Takealot Repricing Engine on port {port}")
     logger.info(f"🎯 FEATURE: PROACTIVE MONITORING + Instant Webhook Responses")
+    
+    # Start background monitoring when running directly
+    def start_monitoring_delayed():
+        time.sleep(10)
+        engine.start_background_monitoring()
+    
+    monitoring_thread = threading.Thread(target=start_monitoring_delayed, daemon=True)
+    monitoring_thread.start()
+    
     app.run(host='0.0.0.0', port=port, debug=False)
