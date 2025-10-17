@@ -98,7 +98,7 @@ class TakealotRepricingEngine:
             return 500, 700  # Fallback values (WHOLE NUMBERS)
 
     def get_competitor_price(self, offer_id):
-        """Get competitor price - try real scraping first, then fallbacks"""
+        """Get competitor price - try multiple methods"""
         try:
             # Check cache first
             cached_price = self._get_cached_price(offer_id)
@@ -106,33 +106,43 @@ class TakealotRepricingEngine:
                 logger.info(f"💾 Using cached price for {offer_id}: R{cached_price}")
                 return cached_price
             
-            # Try REAL scraping first
-            logger.info(f"🎯 Attempting REAL competitor price scraping for {offer_id}")
-            real_price = self.get_real_competitor_price(offer_id)
+            # Method 1: Try JSON API first
+            logger.info(f"🎯 Attempting JSON API for {offer_id}")
+            json_price = self.get_real_competitor_price(offer_id)
             
-            # If real scraping returned a valid price, use it
-            if real_price and real_price > 0:
-                self._cache_price(offer_id, real_price)
-                return real_price
-            else:
-                # Fallback to simulated scraping
-                logger.info("🔄 Real scraping failed, using simulated data")
-                simulated_price = self._simulate_scraping(offer_id)
-                self._cache_price(offer_id, simulated_price)
-                return simulated_price
+            if json_price and json_price > 0:
+                logger.info(f"✅ JSON API successful: R{json_price}")
+                self._cache_price(offer_id, json_price)
+                return json_price
+            
+            # Method 2: Try HTML fallback
+            logger.info("🔄 JSON API failed, trying HTML fallback")
+            html_price = self.get_price_from_html_fallback(offer_id)
+            
+            if html_price and html_price > 0:
+                logger.info(f"✅ HTML fallback successful: R{html_price}")
+                self._cache_price(offer_id, html_price)
+                return html_price
+            
+            # Method 3: Final fallback to simulated data
+            logger.info("🔄 All real methods failed, using simulated data")
+            simulated_price = self._simulate_scraping(offer_id)
+            self._cache_price(offer_id, simulated_price)
+            return simulated_price
             
         except Exception as e:
             logger.error(f"❌ All competitor price methods failed: {e}")
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Fetch lowest competitor price directly from Takealot's JSON API"""
+        """Fetch lowest competitor price directly from Takealot's JSON API - UPDATED"""
         try:
             self._respect_rate_limit()
             api_url = f"https://api.takealot.com/rest/v-2-0-0/product-details/PLID{offer_id}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
                 "Accept": "application/json",
+                "Referer": f"https://www.takealot.com/PLID{offer_id}",
             }
             logger.info(f"🌐 Fetching Takealot API: {api_url}")
 
@@ -140,23 +150,66 @@ class TakealotRepricingEngine:
             response.raise_for_status()
             data = response.json()
 
+            logger.info(f"🔍 Raw API response keys: {list(data.keys())}")
+
+            # Method 1: Try to get core product price first
             product = data.get("product", {})
-            offers = product.get("offers", []) or product.get("offerList", [])
+            logger.info(f"🔍 Product keys: {list(product.keys())}")
+
             prices = []
 
-            for offer in offers:
-                price_cents = offer.get("price")
-                if isinstance(price_cents, (int, float)) and price_cents > 0:
-                    prices.append(price_cents / 100.0)
+            # Look for main product price in various possible locations
+            price_sources = [
+                product.get("buybox", {}).get("price"),  # Buybox price
+                product.get("selling_price"),  # Direct selling price
+                product.get("price"),  # Direct price field
+            ]
 
-            # Include buybox or main selling price if missing
-            buybox_price = product.get("buybox", {}).get("price") or product.get("sellingPrice")
-            if buybox_price:
-                prices.append(buybox_price / 100.0)
+            # Check core_price object if it exists
+            core_price = product.get("core_price", {})
+            if core_price:
+                price_sources.extend([
+                    core_price.get("selling_price"),
+                    core_price.get("price")
+                ])
+
+            # Check offer data
+            offers = product.get("offers", []) or product.get("offerList", [])
+            logger.info(f"🔍 Found {len(offers)} offers")
+
+            for i, offer in enumerate(offers):
+                logger.info(f"🔍 Offer {i} keys: {list(offer.keys())}")
+                # Look for price in various offer fields
+                offer_price_sources = [
+                    offer.get("price"),
+                    offer.get("selling_price"),
+                    offer.get("current_price"),
+                ]
+                
+                for price_val in offer_price_sources:
+                    if isinstance(price_val, (int, float)) and price_val > 0:
+                        price_rand = price_val / 100.0 if price_val > 1000 else price_val
+                        if 100 < price_rand < 2000:  # Reasonable price range
+                            prices.append(price_rand)
+                            logger.info(f"💰 Found price in offer {i}: R{price_rand}")
+
+            # Add valid prices from price_sources
+            for price_val in price_sources:
+                if isinstance(price_val, (int, float)) and price_val > 0:
+                    price_rand = price_val / 100.0 if price_val > 1000 else price_val
+                    if 100 < price_rand < 2000:  # Reasonable price range
+                        prices.append(price_rand)
+                        logger.info(f"💰 Found price in main product: R{price_rand}")
+
+            # Debug: Log the entire product structure if no prices found
+            if not prices:
+                logger.warning("⚠️ No prices found in expected locations, dumping product structure:")
+                import json
+                logger.warning(f"📋 Product structure: {json.dumps(product, indent=2)[:1000]}...")
 
             if prices:
                 lowest = round(min(prices), 2)
-                logger.info(f"🏆 Lowest competitor price from JSON API: R{lowest}")
+                logger.info(f"🏆 Lowest competitor price found: R{lowest}")
                 return lowest
             else:
                 logger.warning("⚠️ No valid prices found in JSON API response")
@@ -164,6 +217,8 @@ class TakealotRepricingEngine:
 
         except Exception as e:
             logger.error(f"❌ Failed to fetch from JSON API: {e}")
+            import traceback
+            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return self._get_fallback_price(offer_id)
 
 
