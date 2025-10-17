@@ -63,37 +63,38 @@ class PriceMonitor:
             return False
     
     def get_competitor_price(self, offer_id):
-        """Get competitor price - with better fallbacks"""
+        """Get stored competitor price (INSTANT)"""
         try:
-            # Check cache first
-            cached_price = self._get_cached_price(offer_id)
-            if cached_price is not None:
-                logger.info(f"💾 Using cached price for {offer_id}: R{cached_price}")
-                return cached_price
+            conn = sqlite3.connect(self.db_file)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT competitor_price, last_updated, source 
+                FROM competitor_prices 
+                WHERE offer_id = ?
+            ''', (str(offer_id),))
+            result = cursor.fetchone()
+            conn.close()
             
-            # Try REAL scraping first
-            logger.info(f"🎯 Attempting REAL competitor price scraping for {offer_id}")
-            real_price = self.get_real_competitor_price(offer_id)
-            
-            # If real scraping failed, try direct HTML
-            if not real_price or real_price <= 0:
-                logger.info("🔄 Real scraping failed, trying direct HTML")
-                real_price = self.get_price_from_html_direct(offer_id)
-            
-            # If we got a valid real price, use it
-            if real_price and real_price > 0:
-                self._cache_price(offer_id, real_price)
-                return real_price
-            else:
-                # Final fallback to simulated scraping
-                logger.info("🔄 All real methods failed, using simulated data")
-                simulated_price = self._simulate_scraping(offer_id)
-                self._cache_price(offer_id, simulated_price)
-                return simulated_price
-                
+            if result:
+                price, last_updated, source = result
+                # Check if data is fresh (less than 1 hour old)
+                try:
+                    last_time = datetime.fromisoformat(last_updated)
+                    time_diff = (datetime.now() - last_time).total_seconds()
+                    
+                    if time_diff < 3600:  # 1 hour freshness
+                        logger.info(f"💾 Using FRESH stored competitor price for {offer_id}: R{price} (from {source})")
+                        return price
+                    else:
+                        logger.info(f"🔄 Stored price too old ({int(time_diff/60)} minutes)")
+                        return None
+                except Exception as e:
+                    logger.error(f"❌ Error parsing timestamp: {e}")
+                    return None
+            return None
         except Exception as e:
-            logger.error(f"❌ All competitor price methods failed: {e}")
-            return self._get_fallback_price(offer_id)
+            logger.error(f"❌ Failed to get stored price: {e}")
+            return None
 
     def start_monitoring(self, product_list, interval_minutes=30):
         """Start background monitoring of all products"""
