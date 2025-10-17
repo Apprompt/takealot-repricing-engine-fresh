@@ -120,24 +120,51 @@ class PriceMonitor:
                     if not self.is_monitoring:
                         break
                     try:
-                        # Use existing scraping method to get competitor price
-                        competitor_price = engine.get_competitor_price(offer_id)
+                        # Use direct scraping instead of engine method to avoid circular reference
+                        competitor_price = self._direct_scrape_price(offer_id)
                         if competitor_price and competitor_price > 0:
                             self.store_competitor_price(offer_id, competitor_price, "background_monitor")
                         # Be nice to Takealot's servers
                         time.sleep(2)
                     except Exception as e:
                         logger.error(f"❌ Monitoring failed for {offer_id}: {e}")
-                        time.sleep(5)  # Longer delay on error
+                        time.sleep(5)
                 
                 if self.is_monitoring:
                     logger.info(f"⏰ Monitoring cycle completed. Sleeping for {interval_minutes} minutes")
-                    time.sleep(interval_minutes * 60)  # Convert to seconds
-                
+                    time.sleep(interval_minutes * 60)
+                    
             except Exception as e:
                 logger.error(f"❌ Monitoring loop error: {e}")
                 if self.is_monitoring:
-                    time.sleep(60)  # Wait a minute before retrying
+                    time.sleep(60)
+
+    def _direct_scrape_price(self, offer_id):
+        """Direct price scraping for monitoring (avoids circular references)"""
+        try:
+            # Simple direct API call
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+            }
+            
+            response = requests.get(api_url, headers=headers, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                product = data.get("product", {})
+                
+                # Simple price extraction
+                price = (product.get("buybox", {}).get("price") or 
+                        product.get("selling_price") or 
+                        product.get("core_price", {}).get("selling_price"))
+                
+                if price and price > 0:
+                    return price / 100.0  # Convert cents to rands
+            return None
+        except Exception as e:
+            logger.error(f"❌ Direct scrape failed for {offer_id}: {e}")
+            return None
     
     def stop_monitoring(self):
         """Stop background monitoring"""
