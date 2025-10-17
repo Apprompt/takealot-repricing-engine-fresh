@@ -126,37 +126,6 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Extract the LOWEST competitor price from Takealot - FIXED URL"""
-        try:
-            self._respect_rate_limit()
-            
-            # ✅ CORRECT Takealot URL format with /x/ path
-            url = f"https://www.takealot.com/x/plid{offer_id}"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            }
-            
-            logger.info(f"🌐 Scraping REAL competitor price from CORRECT URL: {url}")
-            response = self.session.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
-            
-            # Parse the HTML for competitor prices
-            competitor_price = self._extract_lowest_competitor_price(response.text, offer_id)
-            
-            if competitor_price:
-                logger.info(f"💰 REAL Competitor price found: R{competitor_price}")
-                return float(competitor_price)
-            else:
-                logger.warning("⚠️ No competitor price found in HTML, using fallback")
-                return self._get_fallback_price(offer_id)
-                
-        except Exception as e:
-            logger.error(f"❌ Real scraping failed: {e}")
-            return self._get_fallback_price(offer_id)
-
-    def get_real_competitor_price(self, offer_id):
         """Fetch lowest competitor price directly from Takealot's JSON API"""
         try:
             self._respect_rate_limit()
