@@ -157,7 +157,7 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def _extract_lowest_competitor_price(self, html_content, offer_id):
-        """Extract lowest competitor price by first checking embedded JSON"""
+        """Extract lowest competitor price from Takealot /x/plid... JSON structure"""
         try:
             import re, json
             from bs4 import BeautifulSoup
@@ -165,47 +165,42 @@ class TakealotRepricingEngine:
             soup = BeautifulSoup(html_content, 'html.parser')
             all_prices = []
 
-            # STEP 1️⃣: Try to find JSON embedded in <script> tags
-            script_tags = soup.find_all('script')
-            for tag in script_tags:
-                if not tag.string:
-                    continue
-                text = tag.string.strip()
-                # Look for Takealot JSON object containing "price"
-                if '"price"' in text and 'PLID' in text:
-                    try:
-                        json_matches = re.findall(r'\{.*?"price":.*?\}', text)
-                        for match in json_matches:
-                            data = json.loads(match)
-                            price_cents = data.get("price")
-                            if price_cents:
-                                price_rands = round(float(price_cents) / 100.0, 2)
-                                all_prices.append(price_rands)
-                                logger.info(f"💰 Found price from embedded JSON: R{price_rands}")
-                    except Exception as e:
-                        continue
+            # 1️⃣ Extract embedded JSON from <script id="__NEXT_DATA__">
+            next_data_script = soup.find("script", {"id": "__NEXT_DATA__"})
+            if next_data_script and next_data_script.string:
+                try:
+                    data = json.loads(next_data_script.string)
+                    # Navigate safely to find any numeric "price" values
+                    json_text = json.dumps(data)
+                    matches = re.findall(r'"price"\s*:\s*(\d+)', json_text)
+                    for match in matches:
+                        price_cents = int(match)
+                        price_rands = round(price_cents / 100.0, 2)
+                        all_prices.append(price_rands)
+                        logger.info(f"💰 Extracted price from __NEXT_DATA__: R{price_rands}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to parse __NEXT_DATA__ JSON: {e}")
 
-            # STEP 2️⃣: Fallback — check visible text like "R 452"
+            # 2️⃣ If no JSON prices, fallback to visible text pattern
             if not all_prices:
-                logger.info("⚠️ No embedded JSON prices found — falling back to visible text")
-                all_text_elements = soup.find_all(string=re.compile(r'R\s*\d+'))
-                for element in all_text_elements:
-                    matches = re.findall(r'R\s*(\d+)', element)
-                    for m in matches:
-                        price = float(m)
-                        if 100 < price < 10000:
-                            all_prices.append(price)
+                logger.info("⚠️ No JSON prices found — fallback to visible text scan")
+                text_matches = re.findall(r'R\s*(\d+)', html_content)
+                for match in text_matches:
+                    price = float(match)
+                    if 100 < price < 10000:
+                        all_prices.append(price)
 
+            # 3️⃣ Select lowest reasonable price
             if all_prices:
                 lowest = min(all_prices)
-                logger.info(f"🏆 Selected lowest competitor price: R{lowest}")
+                logger.info(f"🏆 Final lowest competitor price selected: R{lowest}")
                 return lowest
             else:
-                logger.warning("❌ No price found in HTML or JSON")
+                logger.warning("❌ No prices found at all in HTML/JSON")
                 return None
 
         except Exception as e:
-            logger.error(f"❌ Price extraction failed: {e}")
+            logger.error(f"❌ Competitor price extraction failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None
