@@ -455,12 +455,15 @@ class TakealotRepricingEngine:
     def update_price(self, offer_id, new_price):
         """Update price on Takealot using REAL API calls"""
         try:
-            # Get API credentials from environment variables
             api_key = os.getenv('TAKEALOT_API_KEY')
             api_secret = os.getenv('TAKEALOT_API_SECRET')
             
+            # 🔍 ADD DEBUG LOGGING HERE
+            logger.info(f"🔑 DEBUG: API Key available: {bool(api_key)}")
+            logger.info(f"🔑 DEBUG: API Secret available: {bool(api_secret)}")
+            
             if not api_key or not api_secret:
-                logger.error("❌ Missing Takealot API credentials")
+                logger.error("❌ DEBUG: Missing Takealot API credentials")
                 return False
             
             # Takealot API endpoint for price updates
@@ -470,7 +473,7 @@ class TakealotRepricingEngine:
             payload = {
                 "seller_listings": [{
                     "offer_id": str(offer_id),
-                    "selling_price": int(new_price)  # Takealot expects whole numbers
+                    "selling_price": int(new_price)
                 }]
             }
             
@@ -480,22 +483,28 @@ class TakealotRepricingEngine:
                 "X-Api-Secret": api_secret,
             }
             
-            logger.info(f"📤 Updating {offer_id} to R{new_price} via Takealot API")
+            # 🔍 ADD MORE DEBUG LOGGING
+            logger.info(f"📤 DEBUG: Updating {offer_id} to R{new_price}")
+            logger.info(f"🔧 DEBUG: Payload: {payload}")
             
             # Make the API call
             response = self.session.put(api_url, json=payload, headers=headers, timeout=30)
             
+            # 🔍 ADD RESPONSE DEBUGGING
+            logger.info(f"📥 DEBUG: API Response Status: {response.status_code}")
+            logger.info(f"📥 DEBUG: API Response Text: {response.text}")
+            
             if response.status_code == 200:
-                logger.info(f"✅ Successfully updated {offer_id} to R{new_price}")
+                logger.info(f"✅ DEBUG: Successfully updated {offer_id} to R{new_price}")
                 return True
             else:
-                logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
+                logger.error(f"❌ DEBUG: API update failed: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Price update failed: {e}")
+            logger.error(f"❌ DEBUG: Price update failed: {e}")
             import traceback
-            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
+            logger.error(f"❌ DEBUG: Stack trace: {traceback.format_exc()}")
             return False
 
     def update_price_with_retry(self, offer_id, new_price, max_retries=3):
@@ -835,7 +844,58 @@ def manual_update_price():
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500        
+        return jsonify({'error': str(e)}), 500   
+
+@app.route('/debug-api-setup')
+def debug_api_setup():
+    """Debug API credentials and connection"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    api_secret = os.getenv('TAKEALOT_API_SECRET')
+    
+    # Test API connectivity
+    try:
+        test_url = "https://api.takealot.com/v1/sellerlistings"
+        headers = {
+            "X-Api-Key": api_key,
+            "X-Api-Secret": api_secret,
+        }
+        response = requests.get(test_url, headers=headers, timeout=10)
+        api_status = response.status_code
+    except Exception as e:
+        api_status = f"Error: {e}"
+    
+    return jsonify({
+        'api_key_configured': bool(api_key),
+        'api_secret_configured': bool(api_secret),
+        'api_connection_test': api_status,
+        'environment': os.getenv('RAILWAY_ENVIRONMENT', 'unknown')
+    })
+
+@app.route('/debug-product-status/<offer_id>')
+def debug_product_status(offer_id):
+    """Check current product status and pricing"""
+    try:
+        # Get current competitor price
+        competitor_price, source = engine.get_competitor_price_instant(offer_id)
+        
+        # Get your product config
+        cost_price, selling_price = engine.get_product_thresholds(offer_id)
+        
+        # Calculate what price should be set
+        optimal_price = engine.calculate_optimal_price(743, competitor_price, offer_id)  # Using 743 as current
+        
+        return jsonify({
+            'offer_id': offer_id,
+            'competitor_price': competitor_price,
+            'competitor_source': source,
+            'your_cost_price': cost_price,
+            'your_selling_price': selling_price,
+            'calculated_optimal_price': optimal_price,
+            'business_logic_applied': describe_business_rule(743, competitor_price, optimal_price),
+            'expected_action': 'REVERT_TO_SELLING' if competitor_price < cost_price else 'R1_BELOW_COMPETITOR'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500            
 
 def describe_business_rule(my_price, competitor_price, optimal_price):
     """Describe which business rule was applied"""
