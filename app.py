@@ -615,7 +615,7 @@ def home():
         """Main webhook endpoint - WITH SECURITY VERIFICATION & INSTANT PRICING"""
         try:
             # Verify webhook signature if secret is provided
-            webhook_secret = os.getenv('TAKEALOT_WEBHOOK_SECRET')
+            webhook_secret = os.getenv('WEBHOOK_SECRET')
             if webhook_secret:
                 signature = request.headers.get('X-Takealot-Signature')
                 if not signature:
