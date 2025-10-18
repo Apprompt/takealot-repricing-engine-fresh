@@ -11,6 +11,10 @@ import pandas as pd
 import sqlite3
 import threading
 
+print("🔍 DEBUG: Checking environment variables on startup...")
+print(f"TAKEALOT_API_KEY exists: {bool(os.getenv('TAKEALOT_API_KEY'))}")
+print(f"TAKEALOT_API_SECRET exists: {bool(os.getenv('TAKEALOT_API_SECRET'))}")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -895,7 +899,30 @@ def debug_product_status(offer_id):
             'expected_action': 'REVERT_TO_SELLING' if competitor_price < cost_price else 'R1_BELOW_COMPETITOR'
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500            
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/debug-env-all')
+def debug_env_all():
+    """Debug all environment variables (redacted for security)"""
+    all_vars = dict(os.environ)
+    
+    # Redact sensitive values but show if they exist
+    debug_info = {}
+    for key, value in all_vars.items():
+        if 'API' in key or 'KEY' in key or 'SECRET' in key:
+            debug_info[key] = {
+                'exists': True,
+                'length': len(value),
+                'value_preview': value[:4] + '...' if value else 'empty'
+            }
+        else:
+            debug_info[key] = {
+                'exists': True,
+                'value': value
+            }
+    
+    return jsonify(debug_info)
+
 
 def describe_business_rule(my_price, competitor_price, optimal_price):
     """Describe which business rule was applied"""
@@ -929,12 +956,14 @@ if __name__ == '__main__':
 
 @app.route('/test-update/<offer_id>/<int:new_price>')
 def test_price_update(offer_id, new_price):
-    """Safe test endpoint for price updates (use small changes for testing)"""
+    """Test endpoint for price updates - minimal restrictions for testing"""
     try:
-        # Safety check - don't allow huge price changes in test
-        current_test_price = 500  # Mock current price for testing
-        if abs(new_price - current_test_price) > 100:
-            return jsonify({'error': 'Price change too large for test'}), 400
+        # Basic safety - just ensure it's a reasonable price (> R1, < R5000)
+        if new_price < 1 or new_price > 5000:
+            return jsonify({'error': 'Price must be between R1 and R5000 for testing'}), 400
+        
+        # Get actual thresholds for info (but don't restrict)
+        cost_price, selling_price = engine.get_product_thresholds(offer_id)
         
         success = engine.update_price_with_retry(offer_id, new_price)
         
@@ -942,7 +971,11 @@ def test_price_update(offer_id, new_price):
             'offer_id': offer_id,
             'new_price': new_price,
             'update_success': success,
-            'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!'
+            'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!',
+            'your_cost_price': cost_price,
+            'your_selling_price': selling_price,
+            'warning': 'This is a REAL price update on Takealot - use carefully!'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
