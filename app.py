@@ -687,65 +687,6 @@ def handle_price_change():
         logger.error(f"❌ Stack trace: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/webhook/test-no-auth', methods=['POST'])
-def webhook_test_no_auth():
-    """Webhook endpoint without signature verification for testing"""
-    try:
-        webhook_data = request.get_json()
-        logger.info(f"📥 TEST Webhook received: {webhook_data}")
-        
-        offer_id = webhook_data.get('offer_id')
-        values_changed = webhook_data.get('values_changed', {})
-        my_current_price = 0
-        
-        # Extract your current price
-        if isinstance(values_changed, dict):
-            my_current_price = values_changed.get('selling_price', {}).get('new_value', 0)
-        
-        logger.info(f"💰 TEST - Offer: {offer_id}, My Price: R{my_current_price}")
-        
-        if not offer_id:
-            return jsonify({'error': 'Missing offer_id'}), 400
-        
-        # 🎯 INSTANT competitor price lookup
-        competitor_price, source = engine.get_competitor_price_instant(offer_id)
-        
-        logger.info(f"🎉 TEST USING {source.upper()} COMPETITOR DATA: R{competitor_price}")
-        
-        # Calculate optimal price using your business logic
-        optimal_price = engine.calculate_optimal_price(my_current_price, competitor_price, offer_id)
-        
-        # Determine if update is needed
-        needs_update = optimal_price != my_current_price
-        
-        if needs_update:
-            update_success = engine.update_price_with_retry(offer_id, optimal_price)
-            status = 'updated' if update_success else 'update_failed'
-        else:
-            update_success = False
-            status = 'no_change'
-        
-        response = {
-            'status': status,
-            'offer_id': offer_id,
-            'your_current_price': int(my_current_price),
-            'competitor_price': int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else "we_own_buybox",
-            'competitor_source': source,
-            'calculated_price': optimal_price,
-            'price_updated': update_success,
-            'business_rule': describe_business_rule(my_current_price, competitor_price, optimal_price),
-            'response_time': 'INSTANT' if source == 'proactive_monitoring' else 'SLOW',
-            'timestamp': datetime.now().isoformat(),
-            'note': 'TEST ENDPOINT - No signature verification'
-        }
-        
-        logger.info(f"📤 TEST Webhook response: {response}")
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.error(f"❌ TEST Webhook error: {e}")
-        return jsonify({'error': str(e)}), 500
-
 
 @app.route('/test/<offer_id>')
 def test_endpoint(offer_id):
