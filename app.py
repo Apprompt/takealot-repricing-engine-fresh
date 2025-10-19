@@ -469,19 +469,16 @@ class TakealotRepricingEngine:
         return new_price
 
     def update_price(self, offer_id, new_price):
-        """Update price on Takealot using PLID identifier"""
+        """Update price on Takealot using correct identifier"""
         try:
             api_key = os.getenv('TAKEALOT_API_KEY')
-            
             BASE_URL = "https://seller-api.takealot.com"
             
-            # Use PLID identifier - try different endpoint variations
-            endpoint_variations = [
-                f"{BASE_URL}/v2/offers/offer?identifier=PLID{offer_id}",
-                f"{BASE_URL}/v1/offers/PLID{offer_id}",
-                f"{BASE_URL}/v1/offers/{offer_id}",
-                f"{BASE_URL}/v2/offers/PLID{offer_id}"
-            ]
+            # Use the actual offer_id from your seller account
+            # Replace this with the real offer_id once we find it
+            actual_offer_id = "106124921"  # Example from your offers - replace with correct one
+            
+            endpoint = f"{BASE_URL}/v2/offers/offer?identifier={actual_offer_id}"
             
             headers = {
                 "Authorization": f"Key {api_key}",
@@ -492,39 +489,23 @@ class TakealotRepricingEngine:
                 "selling_price": int(new_price)
             }
             
-            # Try each endpoint variation
-            for endpoint in endpoint_variations:
-                logger.info(f"🔑 Trying endpoint: {endpoint}")
-                logger.info(f"📤 Payload: {payload}")
-                
-                try:
-                    response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
-                    
-                    logger.info(f"📥 Response Status: {response.status_code}")
-                    logger.info(f"📥 Response Text: {response.text}")
-                    
-                    if response.status_code == 200:
-                        logger.info(f"✅ SUCCESS: Updated {offer_id} to R{new_price}")
-                        return True
-                    elif response.status_code == 404:
-                        logger.info(f"🔄 Endpoint {endpoint} not found, trying next...")
-                        continue
-                    else:
-                        logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
-                        # Don't continue to next if we got a different error (like 400, 401, etc.)
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"❌ Error with endpoint {endpoint}: {e}")
-                    continue
+            logger.info(f"🔑 Updating offer: {actual_offer_id}")
+            logger.info(f"🌐 Endpoint: {endpoint}")
             
-            logger.error(f"❌ All endpoint variations failed for PLID{offer_id}")
-            return False
+            response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
+            
+            logger.info(f"📥 Response Status: {response.status_code}")
+            logger.info(f"📥 Response Text: {response.text}")
+            
+            if response.status_code == 200:
+                logger.info(f"✅ SUCCESS: Updated {actual_offer_id} to R{new_price}")
+                return True
+            else:
+                logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
+                return False
                 
         except Exception as e:
             logger.error(f"❌ Price update failed: {e}")
-            import traceback
-            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return False
 
     def update_price_with_retry(self, offer_id, new_price, max_retries=3):
@@ -1372,6 +1353,51 @@ def debug_find_offer(search_term):
                 'error': f'API returned {response.status_code}',
                 'response_text': response.text
             })
+            
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+@app.route('/debug-search-sanding-disc')
+def debug_search_sanding_disc():
+    """Search for the sanding disc product in your offers"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    BASE_URL = "https://seller-api.takealot.com"
+    
+    headers = {
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get all offers
+    endpoint = f"{BASE_URL}/v2/offers"
+    
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=10)
+        if response.status_code == 200:
+            offers_data = response.json()
+            all_offers = offers_data.get('offers', [])
+            
+            # Search for sanding disc related products
+            sanding_offers = []
+            for offer in all_offers:
+                title = offer.get('title', '').lower()
+                if any(keyword in title for keyword in ['sanding', 'disc', 'abrasive', 'psa']):
+                    sanding_offers.append({
+                        'offer_id': offer.get('offer_id'),
+                        'title': offer.get('title'),
+                        'selling_price': offer.get('selling_price'),
+                        'status': offer.get('status'),
+                        'sku': offer.get('sku'),
+                        'barcode': offer.get('barcode')
+                    })
+            
+            return jsonify({
+                'sanding_disc_offers': sanding_offers,
+                'total_offers_searched': len(all_offers),
+                'note': 'Look for the sanding disc product in your seller account'
+            })
+        else:
+            return jsonify({'error': f'API returned {response.status_code}'})
             
     except Exception as e:
         return jsonify({'error': str(e)})
