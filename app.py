@@ -1260,6 +1260,35 @@ def debug_price_update_test(offer_id, new_price):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug-api-simple')
+def debug_api_simple():
+    """Simple API endpoint test"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    api_secret = os.getenv('TAKEALOT_API_SECRET')
+    
+    # Test just one endpoint
+    endpoint = "https://api.takealot.com/v1/sellerlistings"
+    headers = {
+        "X-Api-Key": api_key,
+        "X-Api-Secret": api_secret,
+    }
+    
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=10)
+        return jsonify({
+            'endpoint': endpoint,
+            'status_code': response.status_code,
+            'response_text': response.text[:500] if response.text else 'empty',
+            'credentials_available': bool(api_key and api_secret)
+        })
+    except Exception as e:
+        return jsonify({
+            'endpoint': endpoint,
+            'error': str(e),
+            'credentials_available': bool(api_key and api_secret)
+        })
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting Takealot Repricing Engine on port {port}")
