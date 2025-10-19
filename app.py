@@ -469,58 +469,44 @@ class TakealotRepricingEngine:
         return new_price
 
     def update_price(self, offer_id, new_price):
-        """Update price on Takealot using REAL API calls"""
+        """Update price on Takealot using the CORRECT API format from your working app"""
         try:
             api_key = os.getenv('TAKEALOT_API_KEY')
-            api_secret = os.getenv('TAKEALOT_API_SECRET')
             
-            # 🔍 ADD DEBUG LOGGING HERE
-            logger.info(f"🔑 DEBUG: API Key available: {bool(api_key)}")
-            logger.info(f"🔑 DEBUG: API Secret available: {bool(api_secret)}")
-            
-            if not api_key or not api_secret:
-                logger.error("❌ DEBUG: Missing Takealot API credentials")
-                return False
-            
-            # Takealot API endpoint for price updates
-            api_url = "https://api.takealot.com/v1/sellerlistings/update"
-            
-            # Prepare the request payload
-            payload = {
-                "seller_listings": [{
-                    "offer_id": str(offer_id),
-                    "selling_price": int(new_price)
-                }]
-            }
+            # Use the CORRECT API format from your working app
+            BASE_URL = "https://seller-api.takealot.com"
+            endpoint = f"{BASE_URL}/v2/offers/offer?identifier=PLID{offer_id}"
             
             headers = {
-                "Content-Type": "application/json",
-                "X-Api-Key": api_key,
-                "X-Api-Secret": api_secret,
+                "Authorization": f"Key {api_key}",
+                "Content-Type": "application/json"
             }
             
-            # 🔍 ADD MORE DEBUG LOGGING
-            logger.info(f"📤 DEBUG: Updating {offer_id} to R{new_price}")
-            logger.info(f"🔧 DEBUG: Payload: {payload}")
+            payload = {
+                "selling_price": int(new_price)
+            }
             
-            # Make the API call
-            response = self.session.put(api_url, json=payload, headers=headers, timeout=30)
+            logger.info(f"🔑 Using CORRECT API format from working app")
+            logger.info(f"🌐 Endpoint: {endpoint}")
+            logger.info(f"📤 Payload: {payload}")
             
-            # 🔍 ADD RESPONSE DEBUGGING
-            logger.info(f"📥 DEBUG: API Response Status: {response.status_code}")
-            logger.info(f"📥 DEBUG: API Response Text: {response.text}")
+            # Use PATCH method like your working app
+            response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
+            
+            logger.info(f"📥 Response Status: {response.status_code}")
+            logger.info(f"📥 Response Text: {response.text}")
             
             if response.status_code == 200:
-                logger.info(f"✅ DEBUG: Successfully updated {offer_id} to R{new_price}")
+                logger.info(f"✅ SUCCESS: Updated {offer_id} to R{new_price}")
                 return True
             else:
-                logger.error(f"❌ DEBUG: API update failed: {response.status_code} - {response.text}")
+                logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ DEBUG: Price update failed: {e}")
+            logger.error(f"❌ Price update failed: {e}")
             import traceback
-            logger.error(f"❌ DEBUG: Stack trace: {traceback.format_exc()}")
+            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
             return False
 
     def update_price_with_retry(self, offer_id, new_price, max_retries=3):
@@ -1262,15 +1248,16 @@ def debug_price_update_test(offer_id, new_price):
 
 @app.route('/debug-api-simple')
 def debug_api_simple():
-    """Simple API endpoint test"""
+    """Simple API endpoint test using CORRECT format"""
     api_key = os.getenv('TAKEALOT_API_KEY')
-    api_secret = os.getenv('TAKEALOT_API_SECRET')
     
-    # Test just one endpoint
-    endpoint = "https://api.takealot.com/v1/sellerlistings"
+    # Use the CORRECT endpoint from your working app
+    BASE_URL = "https://seller-api.takealot.com"
+    endpoint = f"{BASE_URL}/v2/offers"
+    
     headers = {
-        "X-Api-Key": api_key,
-        "X-Api-Secret": api_secret,
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json"
     }
     
     try:
@@ -1279,15 +1266,16 @@ def debug_api_simple():
             'endpoint': endpoint,
             'status_code': response.status_code,
             'response_text': response.text[:500] if response.text else 'empty',
-            'credentials_available': bool(api_key and api_secret)
+            'credentials_available': bool(api_key),
+            'using_correct_format': True
         })
     except Exception as e:
         return jsonify({
             'endpoint': endpoint,
             'error': str(e),
-            'credentials_available': bool(api_key and api_secret)
+            'credentials_available': bool(api_key),
+            'using_correct_format': True
         })
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
