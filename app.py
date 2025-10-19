@@ -354,8 +354,8 @@ class TakealotRepricingEngine:
                         logger.info(f"🏆 Buybox seller ID: {buybox_seller_id}")
                         
                         if buybox_price_cents and buybox_price_cents > 0:
-                            # 🎯 CRITICAL FIX: Convert cents to rands correctly
-                            buybox_price_rands = buybox_price_cents  # Already in rands based on debug data
+                            # ✅ FIXED: Convert cents to rands properly
+                            buybox_price_rands = buybox_price_cents / 100.0
                             logger.info(f"💰 Buybox price: R{buybox_price_rands}")
                             
                             # 🎯 CHECK IF WE OWN THE BUYBOX
