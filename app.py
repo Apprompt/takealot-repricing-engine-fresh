@@ -892,6 +892,37 @@ def debug_api_setup():
         'environment': os.getenv('RAILWAY_ENVIRONMENT', 'unknown')
     })
 
+def debug_api_endpoints():
+    """Test multiple Takealot API endpoints"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    api_secret = os.getenv('TAKEALOT_API_SECRET')
+    
+    test_endpoints = [
+        "https://api.takealot.com/v1/sellerlistings",
+        "https://api.takealot.com/v1/offers", 
+        "https://api.takealot.com/v1/listings",
+        "https://api.takealot.com/v1/products"
+    ]
+    
+    results = {}
+    headers = {
+        "X-Api-Key": api_key,
+        "X-Api-Secret": api_secret,
+    }
+    
+    for endpoint in test_endpoints:
+        try:
+            response = requests.get(endpoint, headers=headers, timeout=10)
+            results[endpoint] = {
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'response_preview': response.text[:200] if response.text else 'empty'
+            }
+        except Exception as e:
+            results[endpoint] = f"Error: {str(e)}"
+    
+    return jsonify(results)
+
 @app.route('/debug-api-test')
 def debug_api_test():
     """Better API connection test"""
