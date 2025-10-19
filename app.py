@@ -1324,6 +1324,45 @@ def debug_plid_test(offer_id):
             'plid_used': f"PLID{offer_id}"
         })
 
+def update_price(self, offer_id, new_price):
+    """Update price on Takealot using correct identifier"""
+    try:
+        api_key = os.getenv('TAKEALOT_API_KEY')
+        BASE_URL = "https://seller-api.takealot.com"
+        
+        # TODO: Replace YOUR_ACTUAL_OFFER_ID with the real identifier from debug-find-offer
+        actual_offer_identifier = "YOUR_ACTUAL_OFFER_ID"  # This will be offer_id, sku, or barcode
+        
+        endpoint = f"{BASE_URL}/v2/offers/offer?identifier={actual_offer_identifier}"
+        
+        headers = {
+            "Authorization": f"Key {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "selling_price": int(new_price)
+        }
+        
+        logger.info(f"🔑 Updating offer: {actual_offer_identifier}")
+        logger.info(f"🌐 Endpoint: {endpoint}")
+        
+        response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
+        
+        logger.info(f"📥 Response Status: {response.status_code}")
+        logger.info(f"📥 Response Text: {response.text}")
+        
+        if response.status_code == 200:
+            logger.info(f"✅ SUCCESS: Updated {actual_offer_identifier} to R{new_price}")
+            return True
+        else:
+            logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Price update failed: {e}")
+        return False
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
