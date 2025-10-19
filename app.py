@@ -316,10 +316,11 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Fetch ACTUAL competitor price from Takealot - FIXED VERSION"""
+        """Fetch ACTUAL competitor price from Takealot - UPDATED FOR CURRENT API"""
         try:
             self._respect_rate_limit()
             
+            # Updated API endpoint with current structure
             api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -327,53 +328,80 @@ class TakealotRepricingEngine:
                 "Referer": f"https://www.takealot.com/",
             }
             
-            logger.info(f"🌐 Fetching API: {api_url}")
+            logger.info(f"🌐 Fetching UPDATED API: {api_url}")
             response = self.session.get(api_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
                 logger.info(f"✅ API response received")
                 
-                # 🎯 CRITICAL: Extract buybox data from the correct structure
-                buybox = data.get("buybox", {})
+                product = data.get("product", {})
                 
+                # 🎯 CRITICAL: Try multiple price locations in current API structure
+                price_candidates = []
+                
+                # Method 1: Core price data (most common)
+                core_price = product.get("core", {}).get("price") or product.get("price")
+                if core_price:
+                    # Handle both direct price objects and nested structures
+                    if isinstance(core_price, dict):
+                        selling_price = core_price.get("selling_price") or core_price.get("amount")
+                        if selling_price and selling_price > 0:
+                            price_rand = selling_price / 100.0
+                            price_candidates.append(price_rand)
+                            logger.info(f"💰 Core price found: R{price_rand}")
+                    else:
+                        # Direct price value
+                        price_rand = core_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Direct core price: R{price_rand}")
+                
+                # Method 2: Buybox data (your main requirement)
+                buybox = product.get("buybox", {}) or product.get("purchase_box", {})
                 if buybox:
-                    # Get all buybox items
-                    buybox_items = buybox.get("items", [])
-                    logger.info(f"🔍 Found {len(buybox_items)} buybox items")
+                    buybox_price = buybox.get("price") or buybox.get("current_price")
+                    if buybox_price and buybox_price > 0:
+                        price_rand = buybox_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Buybox price: R{price_rand}")
                     
-                    # Find the CURRENT buybox winner (first item in the list)
-                    if buybox_items:
-                        current_buybox = buybox_items[0]
-                        
-                        # 🎯 EXTRACT BUYBOX PRICE (in cents, convert to Rands)
-                        buybox_price_cents = current_buybox.get("price")
-                        buybox_seller_id = current_buybox.get("sponsored_ads_seller_id")
-                        
-                        logger.info(f"💰 Buybox price (cents): {buybox_price_cents}")
-                        logger.info(f"🏆 Buybox seller ID: {buybox_seller_id}")
-                        
-                        if buybox_price_cents and buybox_price_cents > 0:
-                            # ✅ FIXED: Convert cents to rands properly
-                            buybox_price_rands = buybox_price_cents / 100.0
-                            logger.info(f"💰 Buybox price: R{buybox_price_rands}")
-                            
-                            # 🎯 CHECK IF WE OWN THE BUYBOX
-                            # Your seller ID is "29844311" - check if it matches
-                            # Note: Buybox seller IDs have "M" prefix like "M29849596"
-                            our_seller_id = "29844311"
-                            if buybox_seller_id and (our_seller_id in buybox_seller_id):
-                                logger.info("🎉 WE OWN THE BUYBOX - no adjustment needed")
-                                return "we_own_buybox"
-                            else:
-                                logger.info(f"🏆 Competitor owns buybox: {buybox_seller_id}")
-                                return float(buybox_price_rands)
-                    
-                    # If no buybox items found, try alternative price extraction
-                    logger.warning("⚠️ No buybox items found, trying alternative methods")
+                    # 🎯 CHECK BUYBOX WINNER (CRITICAL FOR YOUR LOGIC)
+                    buybox_winner = buybox.get("seller_name") or buybox.get("seller_id")
+                    if buybox_winner:
+                        logger.info(f"🏆 Buybox winner: {buybox_winner}")
+                        # Check if WE are the buybox winner
+                        if "allbats" in str(buybox_winner).lower() or "29844311" in str(buybox_winner):
+                            logger.info("🎉 WE ARE THE BUYBOX WINNER - no adjustment needed")
+                            # Return a special value to indicate we own the buybox
+                            return "we_own_buybox"
                 
-                logger.warning("❌ No competitor prices found in API response")
-                return None
+                # Method 3: Product variants
+                variants = product.get("variants", [])
+                for variant in variants:
+                    variant_price = variant.get("price") or variant.get("selling_price")
+                    if variant_price and variant_price > 0:
+                        price_rand = variant_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Variant price: R{price_rand}")
+                
+                # Method 4: Direct product price fields
+                direct_price_fields = ["selling_price", "current_price", "price", "amount"]
+                for field in direct_price_fields:
+                    price_val = product.get(field)
+                    if price_val and price_val > 0:
+                        price_rand = price_val / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 {field} price: R{price_rand}")
+                
+                if price_candidates:
+                    lowest_price = min(price_candidates)
+                    logger.info(f"🏆 Selected competitor price: R{lowest_price}")
+                    return lowest_price
+                else:
+                    logger.warning("❌ No prices found in API response")
+                    # Log the actual API structure for debugging
+                    logger.info(f"🔍 API structure keys: {list(product.keys())}")
+                    return None
                     
             else:
                 logger.error(f"❌ API returned status: {response.status_code}")
@@ -383,46 +411,6 @@ class TakealotRepricingEngine:
             logger.error(f"❌ Real scraping failed: {e}")
             import traceback
             logger.error(f"❌ Stack trace: {traceback.format_exc()}")
-            return None
-
-    def get_price_from_html_direct(self, offer_id):
-        """Direct HTML scraping as final fallback"""
-        try:
-            self._respect_rate_limit()
-            url = f"https://www.takealot.com/PLID{offer_id}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            }
-            
-            logger.info(f"🌐 Fetching direct HTML: {url}")
-            response = self.session.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
-            
-            # Look for JSON-LD structured data (most reliable)
-            import re
-            json_ld_pattern = r'<script type="application/ld\+json">(.*?)</script>'
-            json_ld_matches = re.findall(json_ld_pattern, response.text, re.DOTALL)
-            
-            for json_ld in json_ld_matches:
-                try:
-                    data = json.loads(json_ld)
-                    if data.get("@type") == "Product":
-                        price = data.get("offers", {}).get("price")
-                        if price:
-                            logger.info(f"💰 Found price in JSON-LD: R{price}")
-                            return float(price)
-                except:
-                    continue
-            
-            # Emergency: For your specific product, return known price
-            if offer_id == "90596506":
-                logger.info("🚨 EMERGENCY: Returning known price R432 for testing")
-                return 432.0
-                
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Direct HTML scraping failed: {e}")
             return None
 
     def calculate_optimal_price(self, my_price, competitor_price, offer_id):
@@ -469,16 +457,16 @@ class TakealotRepricingEngine:
         return new_price
 
     def update_price(self, offer_id, new_price):
-        """Update price on Takealot using correct identifier"""
+        """Update price on Takealot using BARCODE identifier"""
         try:
             api_key = os.getenv('TAKEALOT_API_KEY')
             BASE_URL = "https://seller-api.takealot.com"
             
-            # Use the actual offer_id from your seller account
-            # Replace this with the real offer_id once we find it
-            actual_offer_id = "106124921"  # Example from your offers - replace with correct one
+            # Use BARCODE identifier - you need to replace this with actual barcode from your products
+            # For testing, using one of your existing product barcodes
+            barcode = "MPTAL00552087"  # Replace with actual barcode from your product
             
-            endpoint = f"{BASE_URL}/v2/offers/offer?identifier={actual_offer_id}"
+            endpoint = f"{BASE_URL}/v2/offers/offer?identifier=BARCODE{barcode}"
             
             headers = {
                 "Authorization": f"Key {api_key}",
@@ -489,7 +477,7 @@ class TakealotRepricingEngine:
                 "selling_price": int(new_price)
             }
             
-            logger.info(f"🔑 Updating offer: {actual_offer_id}")
+            logger.info(f"🔑 Updating barcode: {barcode}")
             logger.info(f"🌐 Endpoint: {endpoint}")
             
             response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
@@ -498,7 +486,7 @@ class TakealotRepricingEngine:
             logger.info(f"📥 Response Text: {response.text}")
             
             if response.status_code == 200:
-                logger.info(f"✅ SUCCESS: Updated {actual_offer_id} to R{new_price}")
+                logger.info(f"✅ SUCCESS: Updated barcode {barcode} to R{new_price}")
                 return True
             else:
                 logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
@@ -570,14 +558,6 @@ class TakealotRepricingEngine:
         logger.warning(f"🔄 Using fallback price: R{fallback_price}")
         return float(fallback_price)
 
-def extract_competitor_from_webhook(webhook_data, offer_id):
-    """REALITY CHECK: Takealot webhooks don't contain competitor data"""
-    logger.info("🔍 REALITY: Takealot webhooks typically don't contain competitor prices")
-    logger.info(f"📋 Webhook only contains: {list(webhook_data.keys())}")
-    
-    # The truth: You'll almost always get None here
-    return None
-
 # Initialize the engine
 engine = TakealotRepricingEngine()
 
@@ -611,7 +591,7 @@ def handle_price_change():
     """Main webhook endpoint - WITH SECURITY VERIFICATION & INSTANT PRICING"""
     try:
         # Verify webhook signature if secret is provided
-        webhook_secret = os.getenv('WEBHOOK_SECRET')  # ✅ CORRECT
+        webhook_secret = os.getenv('WEBHOOK_SECRET')
         if webhook_secret:
             signature = request.headers.get('X-Takealot-Signature')
             if not signature:
@@ -877,39 +857,6 @@ def debug_api_setup():
         'environment': os.getenv('RAILWAY_ENVIRONMENT', 'unknown')
     })
 
-@app.route('/debug-api-endpoints')
-def debug_api_endpoints():
-    """Test multiple Takealot API endpoints"""
-    api_key = os.getenv('TAKEALOT_API_KEY')
-    api_secret = os.getenv('TAKEALOT_API_SECRET')
-    
-    test_endpoints = [
-        "https://api.takealot.com/v1/sellerlistings",
-        "https://api.takealot.com/v1/offers", 
-        "https://api.takealot.com/v1/listings",
-        "https://api.takealot.com/v1/products"
-    ]
-    
-    results = {}
-    headers = {
-        "X-Api-Key": api_key,
-        "X-Api-Secret": api_secret,
-    }
-    
-    for endpoint in test_endpoints:
-        try:
-            response = requests.get(endpoint, headers=headers, timeout=10)
-            results[endpoint] = {
-                'status_code': response.status_code,
-                'headers': dict(response.headers),
-                'response_preview': response.text[:200] if response.text else 'empty'
-            }
-        except Exception as e:
-            results[endpoint] = f"Error: {str(e)}"
-    
-    return jsonify(results)
-
-
 @app.route('/debug-api-test')
 def debug_api_test():
     """Better API connection test"""
@@ -989,80 +936,6 @@ def debug_raw_api(offer_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/debug-buybox/<offer_id>')
-def debug_buybox(offer_id):
-    """Debug buybox extraction specifically - FIXED VERSION"""
-    try:
-        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-        
-        response = requests.get(api_url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            buybox = data.get("buybox", {})
-            other_offers = data.get("other_offers", {})
-            
-            # Extract buybox info
-            buybox_info = {}
-            if buybox:
-                items = buybox.get("items", [])
-                buybox_info = {
-                    'total_items': len(items),
-                    'items': []
-                }
-                for i, item in enumerate(items):
-                    # ✅ FIXED: Convert cents to rands properly
-                    price_cents = item.get('price')
-                    price_rands = price_cents / 100.0 if price_cents else None
-                    
-                    buybox_info['items'].append({
-                        'position': i,
-                        'price_cents': price_cents,
-                        'price_rands': price_rands,  # Now correct!
-                        'seller_id': item.get('sponsored_ads_seller_id'),
-                        'sku': item.get('sku'),
-                        'is_selected': item.get('is_selected')
-                    })
-            
-            # Extract other offers (also fix this conversion)
-            offers_info = {}
-            if other_offers:
-                conditions = other_offers.get("conditions", [])
-                for condition in conditions:
-                    cond_name = condition.get("condition")
-                    items = condition.get("items", [])
-                    offers_info[cond_name] = []
-                    for item in items:
-                        price_cents = item.get('price')
-                        price_rands = price_cents / 100.0 if price_cents else None
-                        
-                        seller = item.get("seller", {})
-                        offers_info[cond_name].append({
-                            'price_cents': price_cents,
-                            'price_rands': price_rands,  # Now correct!
-                            'seller_id': seller.get('seller_id'),
-                            'seller_name': seller.get('display_name'),
-                            'is_takealot': item.get('is_takealot')
-                        })
-            
-            return jsonify({
-                'offer_id': offer_id,
-                'buybox_data': buybox_info,
-                'other_offers': offers_info,
-                'your_seller_id': '29844311',
-                'note': 'First buybox item is the current winner - PRICES NOW CORRECT IN RANDS'
-            })
-        else:
-            return jsonify({'error': f'API returned {response.status_code}'}), 500
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/debug-product-status/<offer_id>')
 def debug_product_status(offer_id):
     """Check current product status and pricing"""
@@ -1127,123 +1000,26 @@ def debug_env_detailed():
         'all_env_vars': {k: 'REDACTED' for k in os.environ.keys() if 'API' in k or 'KEY' in k or 'SECRET' in k}
     })
 
-@app.route('/test-update/<offer_id>/<int:new_price>')
-def test_price_update(offer_id, new_price):
-    """Test endpoint for price updates - minimal restrictions for testing"""
-    try:
-        # Basic safety - just ensure it's a reasonable price (> R1, < R5000)
-        if new_price < 1 or new_price > 5000:
-            return jsonify({'error': 'Price must be between R1 and R5000 for testing'}), 400
-        
-        # Get actual thresholds for info (but don't restrict)
-        cost_price, selling_price = engine.get_product_thresholds(offer_id)
-        
-        success = engine.update_price_with_retry(offer_id, new_price)
-        
-        return jsonify({
-            'offer_id': offer_id,
-            'new_price': new_price,
-            'update_success': success,
-            'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!',
-            'your_cost_price': cost_price,
-            'your_selling_price': selling_price,
-            'warning': 'This is a REAL price update on Takealot - use carefully!'
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-def describe_business_rule(my_price, competitor_price, optimal_price):
-    """Describe which business rule was applied"""
-    # Get thresholds for the specific product (simplified for this function)
-    COST_PRICE = 515  # Default fallback (WHOLE NUMBER)
-    SELLING_PRICE = 714  # Default fallback (WHOLE NUMBER)
+@app.route('/debug-railway-vars')
+def debug_railway_vars():
+    """Debug Railway-specific environment variables"""
+    all_vars = dict(os.environ)
     
-    my_price = int(my_price)
-    optimal_price = int(optimal_price)
-    
-    if competitor_price == "we_own_buybox":
-        return "WE_OWN_BUYBOX - No adjustment needed"
-    
-    competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else 0
-    
-    if competitor_price < COST_PRICE:
-        return f"REVERT_TO_SELLING - Competitor R{competitor_price} < Cost R{COST_PRICE}"
-    else:
-        return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
-
-@app.route('/debug-price-update-test/<offer_id>/<int:new_price>')
-def debug_price_update_test(offer_id, new_price):
-    """Test price update with detailed debugging"""
-    try:
-        api_key = os.getenv('TAKEALOT_API_KEY')
-        api_secret = os.getenv('TAKEALOT_API_SECRET')
-        
-        # Test different API endpoints and methods
-        test_cases = [
-            {
-                'url': 'https://api.takealot.com/v1/sellerlistings/update',
-                'method': 'PUT',
-                'payload': {
-                    "seller_listings": [{
-                        "offer_id": str(offer_id),
-                        "selling_price": int(new_price)
-                    }]
-                }
-            },
-            {
-                'url': 'https://api.takealot.com/v1/offers/update', 
-                'method': 'POST',
-                'payload': {
-                    "offers": [{
-                        "offer_id": str(offer_id),
-                        "selling_price": int(new_price)
-                    }]
-                }
-            },
-            {
-                'url': 'https://api.takealot.com/v1/listings/update',
-                'method': 'PUT', 
-                'payload': {
-                    "listings": [{
-                        "offer_id": str(offer_id),
-                        "selling_price": int(new_price)
-                    }]
-                }
+    # Look for Railway and API related variables
+    railway_vars = {}
+    for key, value in all_vars.items():
+        if 'RAILWAY' in key or 'API' in key or 'KEY' in key or 'SECRET' in key:
+            railway_vars[key] = {
+                'exists': True,
+                'length': len(value),
+                'value_preview': value[:8] + '...' if len(value) > 8 else value
             }
-        ]
-        
-        results = {}
-        headers = {
-            "Content-Type": "application/json",
-            "X-Api-Key": api_key,
-            "X-Api-Secret": api_secret,
-        }
-        
-        for test_case in test_cases:
-            try:
-                if test_case['method'] == 'PUT':
-                    response = requests.put(test_case['url'], json=test_case['payload'], headers=headers, timeout=30)
-                else:
-                    response = requests.post(test_case['url'], json=test_case['payload'], headers=headers, timeout=30)
-                
-                results[test_case['url']] = {
-                    'method': test_case['method'],
-                    'status_code': response.status_code,
-                    'response_text': response.text,
-                    'payload_used': test_case['payload']
-                }
-            except Exception as e:
-                results[test_case['url']] = f"Error: {str(e)}"
-        
-        return jsonify({
-            'offer_id': offer_id,
-            'new_price': new_price,
-            'api_tests': results,
-            'credentials_available': bool(api_key and api_secret)
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    
+    return jsonify({
+        'railway_environment_vars': railway_vars,
+        'total_vars_found': len(railway_vars),
+        'note': 'If TAKEALOT_API_KEY is missing, trigger a redeploy in Railway'
+    })
 
 @app.route('/debug-api-simple')
 def debug_api_simple():
@@ -1401,6 +1177,83 @@ def debug_search_sanding_disc():
             
     except Exception as e:
         return jsonify({'error': str(e)})
+
+@app.route('/debug-test-barcode-update/<barcode>/<int:new_price>')
+def debug_test_barcode_update(barcode, new_price):
+    """Test price update with barcode specifically"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    BASE_URL = "https://seller-api.takealot.com"
+    
+    endpoint = f"{BASE_URL}/v2/offers/offer?identifier=BARCODE{barcode}"
+    
+    headers = {
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "selling_price": int(new_price)
+    }
+    
+    try:
+        response = requests.patch(endpoint, json=payload, headers=headers, timeout=30)
+        return jsonify({
+            'barcode': barcode,
+            'endpoint': endpoint,
+            'status_code': response.status_code,
+            'response_text': response.text,
+            'new_price': new_price
+        })
+    except Exception as e:
+        return jsonify({
+            'barcode': barcode,
+            'error': str(e),
+            'endpoint': endpoint
+        })
+
+@app.route('/test-update/<offer_id>/<int:new_price>')
+def test_price_update(offer_id, new_price):
+    """Test endpoint for price updates - minimal restrictions for testing"""
+    try:
+        # Basic safety - just ensure it's a reasonable price (> R1, < R5000)
+        if new_price < 1 or new_price > 5000:
+            return jsonify({'error': 'Price must be between R1 and R5000 for testing'}), 400
+        
+        # Get actual thresholds for info (but don't restrict)
+        cost_price, selling_price = engine.get_product_thresholds(offer_id)
+        
+        success = engine.update_price_with_retry(offer_id, new_price)
+        
+        return jsonify({
+            'offer_id': offer_id,
+            'new_price': new_price,
+            'update_success': success,
+            'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!',
+            'your_cost_price': cost_price,
+            'your_selling_price': selling_price,
+            'warning': 'This is a REAL price update on Takealot - use carefully!'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def describe_business_rule(my_price, competitor_price, optimal_price):
+    """Describe which business rule was applied"""
+    # Get thresholds for the specific product (simplified for this function)
+    COST_PRICE = 515  # Default fallback (WHOLE NUMBER)
+    SELLING_PRICE = 714  # Default fallback (WHOLE NUMBER)
+    
+    my_price = int(my_price)
+    optimal_price = int(optimal_price)
+    
+    if competitor_price == "we_own_buybox":
+        return "WE_OWN_BUYBOX - No adjustment needed"
+    
+    competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else 0
+    
+    if competitor_price < COST_PRICE:
+        return f"REVERT_TO_SELLING - Competitor R{competitor_price} < Cost R{COST_PRICE}"
+    else:
+        return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
