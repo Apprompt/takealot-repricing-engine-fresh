@@ -1179,6 +1179,80 @@ def describe_business_rule(my_price, competitor_price, optimal_price):
     else:
         return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
 
+@app.route('/debug-price-update-test/<offer_id>/<int:new_price>')
+def debug_price_update_test(offer_id, new_price):
+    """Test price update with detailed debugging"""
+    try:
+        api_key = os.getenv('TAKEALOT_API_KEY')
+        api_secret = os.getenv('TAKEALOT_API_SECRET')
+        
+        # Test different API endpoints and methods
+        test_cases = [
+            {
+                'url': 'https://api.takealot.com/v1/sellerlistings/update',
+                'method': 'PUT',
+                'payload': {
+                    "seller_listings": [{
+                        "offer_id": str(offer_id),
+                        "selling_price": int(new_price)
+                    }]
+                }
+            },
+            {
+                'url': 'https://api.takealot.com/v1/offers/update', 
+                'method': 'POST',
+                'payload': {
+                    "offers": [{
+                        "offer_id": str(offer_id),
+                        "selling_price": int(new_price)
+                    }]
+                }
+            },
+            {
+                'url': 'https://api.takealot.com/v1/listings/update',
+                'method': 'PUT', 
+                'payload': {
+                    "listings": [{
+                        "offer_id": str(offer_id),
+                        "selling_price": int(new_price)
+                    }]
+                }
+            }
+        ]
+        
+        results = {}
+        headers = {
+            "Content-Type": "application/json",
+            "X-Api-Key": api_key,
+            "X-Api-Secret": api_secret,
+        }
+        
+        for test_case in test_cases:
+            try:
+                if test_case['method'] == 'PUT':
+                    response = requests.put(test_case['url'], json=test_case['payload'], headers=headers, timeout=30)
+                else:
+                    response = requests.post(test_case['url'], json=test_case['payload'], headers=headers, timeout=30)
+                
+                results[test_case['url']] = {
+                    'method': test_case['method'],
+                    'status_code': response.status_code,
+                    'response_text': response.text,
+                    'payload_used': test_case['payload']
+                }
+            except Exception as e:
+                results[test_case['url']] = f"Error: {str(e)}"
+        
+        return jsonify({
+            'offer_id': offer_id,
+            'new_price': new_price,
+            'api_tests': results,
+            'credentials_available': bool(api_key and api_secret)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting Takealot Repricing Engine on port {port}")
