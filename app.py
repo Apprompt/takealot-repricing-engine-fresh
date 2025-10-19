@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# At the top of PriceMonitor class
+# Constants
 PRICE_FRESHNESS_SECONDS = 3600  # 1 hour
 MONITORING_INTERVAL_MINUTES = 30
-
+MIN_REQUEST_INTERVAL = 3.0
 
 class PriceMonitor:
     def __init__(self):
@@ -39,19 +39,21 @@ class PriceMonitor:
         
     def _init_database(self):
         """Initialize SQLite database for price storage"""
-        conn = sqlite3.connect(self.db_file)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS competitor_prices (
-                offer_id TEXT PRIMARY KEY,
-                competitor_price REAL,
-                last_updated TIMESTAMP,
-                source TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        logger.info("✅ Price monitoring database initialized")
+        try:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS competitor_prices (
+                        offer_id TEXT PRIMARY KEY,
+                        competitor_price REAL,
+                        last_updated TIMESTAMP,
+                        source TEXT
+                    )
+                ''')
+                conn.commit()
+            logger.info("✅ Price monitoring database initialized")
+        except Exception as e:
+            logger.error(f"❌ Database initialization failed: {e}")
     
     def store_competitor_price(self, offer_id, price, source="scraping"):
         """Store competitor price in database"""
@@ -73,15 +75,14 @@ class PriceMonitor:
     def get_competitor_price(self, offer_id):
         """Get stored competitor price (INSTANT)"""
         try:
-            conn = sqlite3.connect(self.db_file)
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT competitor_price, last_updated, source 
-                FROM competitor_prices 
-                WHERE offer_id = ?
-            ''', (str(offer_id),))
-            result = cursor.fetchone()
-            conn.close()
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT competitor_price, last_updated, source 
+                    FROM competitor_prices 
+                    WHERE offer_id = ?
+                ''', (str(offer_id),))
+                result = cursor.fetchone()
             
             if result:
                 price, last_updated, source = result
@@ -90,7 +91,7 @@ class PriceMonitor:
                     last_time = datetime.fromisoformat(last_updated)
                     time_diff = (datetime.now() - last_time).total_seconds()
                     
-                    if time_diff < 3600:  # 1 hour freshness
+                    if time_diff < PRICE_FRESHNESS_SECONDS:
                         logger.info(f"💾 Using FRESH stored competitor price for {offer_id}: R{price} (from {source})")
                         return price
                     else:
@@ -104,7 +105,7 @@ class PriceMonitor:
             logger.error(f"❌ Failed to get stored price: {e}")
             return None
 
-    def start_monitoring(self, product_list, interval_minutes=30):
+    def start_monitoring(self, product_list, interval_minutes=MONITORING_INTERVAL_MINUTES):
         """Start background monitoring of all products"""
         if self.is_monitoring:
             logger.info("📊 Monitoring already running")
@@ -188,7 +189,7 @@ class TakealotRepricingEngine:
         self.price_cache = {}
         self.cache_ttl = 3600
         self.last_request_time = 0
-        self.min_request_interval = 3.0
+        self.min_request_interval = MIN_REQUEST_INTERVAL
 
         # Load product configurations
         self.product_config = self._load_product_config()
@@ -300,6 +301,9 @@ class TakealotRepricingEngine:
             if real_price and real_price > 0:
                 self._cache_price(offer_id, real_price)
                 return real_price
+            elif real_price == "we_own_buybox":
+                # Special case: we own the buybox
+                return "we_own_buybox"
             else:
                 # Fallback to simulated scraping
                 logger.info("🔄 Real scraping failed, using simulated data")
@@ -312,76 +316,91 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Fetch ACTUAL competitor price from Takealot - WORKING VERSION"""
+        """Fetch ACTUAL competitor price from Takealot - UPDATED FOR CURRENT API"""
         try:
             self._respect_rate_limit()
             
-            # Method 1: Try direct product API
+            # Updated API endpoint with current structure
             api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "application/json",
                 "Referer": f"https://www.takealot.com/",
             }
             
-            logger.info(f"🌐 Fetching API: {api_url}")
+            logger.info(f"🌐 Fetching UPDATED API: {api_url}")
             response = self.session.get(api_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
                 logger.info(f"✅ API response received")
                 
-                # Debug: log the entire response structure
                 product = data.get("product", {})
-                logger.info(f"🔍 Product keys: {list(product.keys())}")
                 
-                # Try to find the core price
-                core_price = product.get("core_price", {})
-                if core_price:
-                    logger.info(f"🔍 Core price keys: {list(core_price.keys())}")
-                    
-                # Look for price in multiple locations
+                # 🎯 CRITICAL: Try multiple price locations in current API structure
                 price_candidates = []
                 
-                # Check core_price first
+                # Method 1: Core price data (most common)
+                core_price = product.get("core", {}).get("price") or product.get("price")
                 if core_price:
-                    selling_price = core_price.get("selling_price")
-                    if selling_price and selling_price > 0:
-                        price_rand = selling_price / 100.0
+                    # Handle both direct price objects and nested structures
+                    if isinstance(core_price, dict):
+                        selling_price = core_price.get("selling_price") or core_price.get("amount")
+                        if selling_price and selling_price > 0:
+                            price_rand = selling_price / 100.0
+                            price_candidates.append(price_rand)
+                            logger.info(f"💰 Core price found: R{price_rand}")
+                    else:
+                        # Direct price value
+                        price_rand = core_price / 100.0
                         price_candidates.append(price_rand)
-                        logger.info(f"💰 Core selling_price: R{price_rand}")
+                        logger.info(f"💰 Direct core price: R{price_rand}")
                 
-                # Check buybox price
-                buybox = product.get("buybox", {})
-                buybox_price = buybox.get("price")
-                if buybox_price and buybox_price > 0:
-                    price_rand = buybox_price / 100.0
-                    price_candidates.append(price_rand)
-                    logger.info(f"💰 Buybox price: R{price_rand}")
-                
-                # Check direct selling_price
-                direct_price = product.get("selling_price")
-                if direct_price and direct_price > 0:
-                    price_rand = direct_price / 100.0
-                    price_candidates.append(price_rand)
-                    logger.info(f"💰 Direct selling_price: R{price_rand}")
-                
-                # Check offers
-                offers = product.get("offers", [])
-                logger.info(f"🔍 Found {len(offers)} offers")
-                for i, offer in enumerate(offers):
-                    offer_price = offer.get("price")
-                    if offer_price and offer_price > 0:
-                        price_rand = offer_price / 100.0
+                # Method 2: Buybox data (your main requirement)
+                buybox = product.get("buybox", {}) or product.get("purchase_box", {})
+                if buybox:
+                    buybox_price = buybox.get("price") or buybox.get("current_price")
+                    if buybox_price and buybox_price > 0:
+                        price_rand = buybox_price / 100.0
                         price_candidates.append(price_rand)
-                        logger.info(f"💰 Offer {i} price: R{price_rand}")
+                        logger.info(f"💰 Buybox price: R{price_rand}")
+                    
+                    # 🎯 CHECK BUYBOX WINNER (CRITICAL FOR YOUR LOGIC)
+                    buybox_winner = buybox.get("seller_name") or buybox.get("seller_id")
+                    if buybox_winner:
+                        logger.info(f"🏆 Buybox winner: {buybox_winner}")
+                        # Check if WE are the buybox winner
+                        if "allbats" in str(buybox_winner).lower() or "29844311" in str(buybox_winner):
+                            logger.info("🎉 WE ARE THE BUYBOX WINNER - no adjustment needed")
+                            # Return a special value to indicate we own the buybox
+                            return "we_own_buybox"
+                
+                # Method 3: Product variants
+                variants = product.get("variants", [])
+                for variant in variants:
+                    variant_price = variant.get("price") or variant.get("selling_price")
+                    if variant_price and variant_price > 0:
+                        price_rand = variant_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Variant price: R{price_rand}")
+                
+                # Method 4: Direct product price fields
+                direct_price_fields = ["selling_price", "current_price", "price", "amount"]
+                for field in direct_price_fields:
+                    price_val = product.get(field)
+                    if price_val and price_val > 0:
+                        price_rand = price_val / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 {field} price: R{price_rand}")
                 
                 if price_candidates:
                     lowest_price = min(price_candidates)
-                    logger.info(f"🏆 Selected lowest price: R{lowest_price}")
+                    logger.info(f"🏆 Selected competitor price: R{lowest_price}")
                     return lowest_price
                 else:
                     logger.warning("❌ No prices found in API response")
+                    # Log the actual API structure for debugging
+                    logger.info(f"🔍 API structure keys: {list(product.keys())}")
                     return None
                     
             else:
@@ -434,29 +453,46 @@ class TakealotRepricingEngine:
             logger.error(f"❌ Direct HTML scraping failed: {e}")
             return None
 
-
     def calculate_optimal_price(self, my_price, competitor_price, offer_id):
-        """YOUR BUSINESS LOGIC with product-specific thresholds - WHOLE NUMBERS ONLY"""
+        """YOUR EXACT BUSINESS LOGIC with buybox detection"""
         # Get thresholds for THIS specific product
         cost_price, selling_price = self.get_product_thresholds(offer_id)
         
         # Convert to integers (whole numbers) for Takealot
         my_price = int(my_price)
-        competitor_price = int(competitor_price)
         cost_price = int(cost_price)
         selling_price = int(selling_price)
         
         logger.info(f"🧮 Calculating price for {offer_id}")
-        logger.info(f"   My price: R{my_price}, Competitor: R{competitor_price}")
-        logger.info(f"   Product Cost: R{cost_price}, Product Selling: R{selling_price}")
+        logger.info(f"   My price: R{my_price}, Cost: R{cost_price}, Selling: R{selling_price}")
+        
+        # 🎯 CRITICAL: Check if we own the buybox
+        if competitor_price == "we_own_buybox":
+            logger.info("🎉 WE OWN THE BUYBOX - no price adjustment needed")
+            return my_price  # Keep current price
+        
+        # Convert competitor price if it's a number
+        competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else None
+        
+        if not competitor_price or competitor_price <= 0:
+            logger.warning("⚠️ No valid competitor price - using selling price")
+            return selling_price
+        
+        logger.info(f"   Competitor buybox price: R{competitor_price}")
         
         # RULE 1: If competitor below THIS PRODUCT'S cost, revert to THIS PRODUCT'S selling price
         if competitor_price < cost_price:
-            logger.info(f"   🔄 REVERT: Competitor R{competitor_price} below product cost R{cost_price} → R{selling_price}")
+            logger.info(f"   🔄 REVERT: Competitor R{competitor_price} below cost R{cost_price} → R{selling_price}")
             return selling_price
         
         # RULE 2: Always be R1 below competitor (whole numbers)
         new_price = competitor_price - 1
+        
+        # Safety check: don't go below cost
+        if new_price < cost_price:
+            logger.info(f"   ⚠️ ADJUSTMENT: R{new_price} below cost R{cost_price} → R{selling_price}")
+            return selling_price
+        
         logger.info(f"   📉 ADJUST: R1 below competitor R{competitor_price} → R{new_price}")
         return new_price
 
@@ -532,7 +568,6 @@ class TakealotRepricingEngine:
         
         logger.error(f"❌ All {max_retries} update attempts failed for {offer_id}")
         return False
-
 
     def _get_cached_price(self, offer_id):
         if offer_id in self.price_cache:
@@ -696,7 +731,7 @@ def handle_price_change():
             'status': status,
             'offer_id': offer_id,
             'your_current_price': int(my_current_price),
-            'competitor_price': int(competitor_price),
+            'competitor_price': int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else "we_own_buybox",
             'competitor_source': source,
             'calculated_price': optimal_price,
             'price_updated': update_success,
@@ -715,21 +750,26 @@ def handle_price_change():
         logger.error(f"❌ Stack trace: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/test/<offer_id>')
 def test_endpoint(offer_id):
     """Test endpoint for manual testing"""
     try:
         test_price = 500  # Whole number now
         competitor_price, source = engine.get_competitor_price_instant(offer_id)
-        # Convert competitor price to whole number
-        competitor_price = int(competitor_price) if competitor_price else 500
-        optimal_price = engine.calculate_optimal_price(test_price, competitor_price, offer_id)
+        
+        # Handle buybox ownership case
+        if competitor_price == "we_own_buybox":
+            optimal_price = test_price  # No change if we own buybox
+            competitor_display = "we_own_buybox"
+        else:
+            competitor_price = int(competitor_price) if competitor_price else 500
+            optimal_price = engine.calculate_optimal_price(test_price, competitor_price, offer_id)
+            competitor_display = competitor_price
         
         return jsonify({
             'offer_id': offer_id,
             'test_price': test_price,
-            'competitor_price': competitor_price,
+            'competitor_price': competitor_display,
             'competitor_source': source,
             'optimal_price': optimal_price,
             'business_rule': describe_business_rule(test_price, competitor_price, optimal_price),
@@ -777,9 +817,10 @@ def debug_scraping(offer_id):
             'offer_id': offer_id,
             'mock_price': mock_price,
             'real_price': real_price,
-            'price_difference': real_price - mock_price if real_price else None,
-            'using_real_data': real_price != mock_price if real_price else False,
-            'real_data_available': real_price is not None
+            'price_difference': real_price - mock_price if real_price and real_price != "we_own_buybox" else None,
+            'using_real_data': real_price != mock_price if real_price and real_price != "we_own_buybox" else False,
+            'real_data_available': real_price is not None and real_price != "we_own_buybox",
+            'buybox_owner': "we_own_buybox" if real_price == "we_own_buybox" else "competitor"
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -809,11 +850,10 @@ def stop_monitoring():
 def get_all_prices():
     """Get all stored competitor prices"""
     try:
-        conn = sqlite3.connect("price_monitor.db")
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM competitor_prices ORDER BY last_updated DESC')
-        results = cursor.fetchall()
-        conn.close()
+        with sqlite3.connect("price_monitor.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM competitor_prices ORDER BY last_updated DESC')
+            results = cursor.fetchall()
         
         prices = []
         for row in results:
@@ -853,7 +893,7 @@ def manual_update_price():
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500   
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/debug-api-setup')
 def debug_api_setup():
@@ -879,6 +919,85 @@ def debug_api_setup():
         'api_connection_test': api_status,
         'environment': os.getenv('RAILWAY_ENVIRONMENT', 'unknown')
     })
+
+@app.route('/debug-api-test')
+def debug_api_test():
+    """Better API connection test"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    api_secret = os.getenv('TAKEALOT_API_SECRET')
+    
+    debug_info = {
+        'api_key_exists': bool(api_key),
+        'api_secret_exists': bool(api_secret),
+        'api_key_length': len(api_key) if api_key else 0,
+        'api_secret_length': len(api_secret) if api_secret else 0,
+    }
+    
+    # Test different API endpoints
+    test_endpoints = [
+        "https://api.takealot.com/v1/sellerlistings",
+        "https://api.takealot.com/v1/offers"
+    ]
+    
+    for endpoint in test_endpoints:
+        try:
+            headers = {
+                "X-Api-Key": api_key,
+                "X-Api-Secret": api_secret,
+            }
+            response = requests.get(endpoint, headers=headers, timeout=10)
+            debug_info[endpoint] = {
+                'status_code': response.status_code,
+                'response_preview': response.text[:100] if response.text else 'empty'
+            }
+        except Exception as e:
+            debug_info[endpoint] = f"Error: {str(e)}"
+    
+    return jsonify(debug_info)
+
+@app.route('/debug-fix-check')
+def debug_fix_check():
+    """Check what's wrong with the current setup"""
+    return jsonify({
+        'environment_variables': {
+            'TAKEALOT_API_KEY': bool(os.getenv('TAKEALOT_API_KEY')),
+            'TAKEALOT_API_SECRET': bool(os.getenv('TAKEALOT_API_SECRET')),
+            'WEBHOOK_SECRET': bool(os.getenv('WEBHOOK_SECRET')),
+        },
+        'current_working_directory': os.getcwd(),
+        'files_in_directory': os.listdir('.'),
+        'product_config_loaded': len(engine.product_config),
+        'sample_product': list(engine.product_config.keys())[:3] if engine.product_config else 'none'
+    })
+
+@app.route('/debug-raw-api/<offer_id>')
+def debug_raw_api(offer_id):
+    """Get raw API response to see actual structure"""
+    try:
+        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return jsonify({
+                'status': 'success',
+                'offer_id': offer_id,
+                'api_structure': data,
+                'product_keys': list(data.get('product', {}).keys()) if data.get('product') else []
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'status_code': response.status_code,
+                'response_text': response.text
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/debug-product-status/<offer_id>')
 def debug_product_status(offer_id):
@@ -928,22 +1047,6 @@ def debug_env_all():
     
     return jsonify(debug_info)
 
-
-def describe_business_rule(my_price, competitor_price, optimal_price):
-    """Describe which business rule was applied"""
-    # Get thresholds for the specific product (simplified for this function)
-    COST_PRICE = 515  # Default fallback (WHOLE NUMBER)
-    SELLING_PRICE = 714  # Default fallback (WHOLE NUMBER)
-    
-    my_price = int(my_price)
-    competitor_price = int(competitor_price)
-    optimal_price = int(optimal_price)
-    
-    if competitor_price < COST_PRICE:
-        return f"REVERT_TO_SELLING - Competitor R{competitor_price} < Cost R{COST_PRICE}"
-    else:
-        return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
-
 @app.route('/test-update/<offer_id>/<int:new_price>')
 def test_price_update(offer_id, new_price):
     """Test endpoint for price updates - minimal restrictions for testing"""
@@ -969,6 +1072,25 @@ def test_price_update(offer_id, new_price):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def describe_business_rule(my_price, competitor_price, optimal_price):
+    """Describe which business rule was applied"""
+    # Get thresholds for the specific product (simplified for this function)
+    COST_PRICE = 515  # Default fallback (WHOLE NUMBER)
+    SELLING_PRICE = 714  # Default fallback (WHOLE NUMBER)
+    
+    my_price = int(my_price)
+    optimal_price = int(optimal_price)
+    
+    if competitor_price == "we_own_buybox":
+        return "WE_OWN_BUYBOX - No adjustment needed"
+    
+    competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else 0
+    
+    if competitor_price < COST_PRICE:
+        return f"REVERT_TO_SELLING - Competitor R{competitor_price} < Cost R{COST_PRICE}"
+    else:
+        return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting Takealot Repricing Engine on port {port}")
@@ -983,5 +1105,3 @@ if __name__ == '__main__':
     monitoring_thread.start()
     
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
