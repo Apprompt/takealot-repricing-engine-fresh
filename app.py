@@ -1086,6 +1086,22 @@ def debug_env_all():
     
     return jsonify(debug_info)
 
+@app.route('/debug-env-detailed')
+def debug_env_detailed():
+    """Detailed environment variable debugging"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    api_secret = os.getenv('TAKEALOT_API_SECRET')
+    
+    return jsonify({
+        'api_key_raw': api_key if api_key else 'NOT_FOUND',
+        'api_secret_raw': api_secret if api_secret else 'NOT_FOUND',
+        'api_key_length': len(api_key) if api_key else 0,
+        'api_secret_length': len(api_secret) if api_secret else 0,
+        'api_key_preview': f"{api_key[:10]}..." if api_key and len(api_key) > 10 else api_key,
+        'api_secret_preview': f"{api_secret[:10]}..." if api_secret and len(api_secret) > 10 else api_secret,
+        'all_env_vars': {k: 'REDACTED' for k in os.environ.keys() if 'API' in k or 'KEY' in k or 'SECRET' in k}
+    })
+
 @app.route('/test-update/<offer_id>/<int:new_price>')
 def test_price_update(offer_id, new_price):
     """Test endpoint for price updates - minimal restrictions for testing"""
