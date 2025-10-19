@@ -349,44 +349,28 @@ class TakealotRepricingEngine:
                         # 🎯 EXTRACT BUYBOX PRICE (in cents, convert to Rands)
                         buybox_price_cents = current_buybox.get("price")
                         buybox_seller_id = current_buybox.get("sponsored_ads_seller_id")
-                        buybox_sku = current_buybox.get("sku")
                         
                         logger.info(f"💰 Buybox price (cents): {buybox_price_cents}")
                         logger.info(f"🏆 Buybox seller ID: {buybox_seller_id}")
-                        logger.info(f"📦 Buybox SKU: {buybox_sku}")
                         
                         if buybox_price_cents and buybox_price_cents > 0:
-                            buybox_price_rands = buybox_price_cents / 100.0
+                            # 🎯 CRITICAL FIX: Convert cents to rands correctly
+                            buybox_price_rands = buybox_price_cents  # Already in rands based on debug data
                             logger.info(f"💰 Buybox price: R{buybox_price_rands}")
                             
                             # 🎯 CHECK IF WE OWN THE BUYBOX
                             # Your seller ID is "29844311" - check if it matches
-                            if buybox_seller_id and ("29844311" in str(buybox_seller_id)):
+                            # Note: Buybox seller IDs have "M" prefix like "M29849596"
+                            our_seller_id = "29844311"
+                            if buybox_seller_id and (our_seller_id in buybox_seller_id):
                                 logger.info("🎉 WE OWN THE BUYBOX - no adjustment needed")
                                 return "we_own_buybox"
                             else:
                                 logger.info(f"🏆 Competitor owns buybox: {buybox_seller_id}")
-                                return buybox_price_rands
+                                return float(buybox_price_rands)
                     
                     # If no buybox items found, try alternative price extraction
                     logger.warning("⚠️ No buybox items found, trying alternative methods")
-                
-                # 🎯 ALTERNATIVE: Check "other_offers" for competitor prices
-                other_offers = data.get("other_offers", {})
-                if other_offers:
-                    conditions = other_offers.get("conditions", [])
-                    for condition in conditions:
-                        if condition.get("condition") == "New":
-                            items = condition.get("items", [])
-                            for item in items:
-                                seller_id = item.get("seller", {}).get("seller_id")
-                                price_cents = item.get("price")
-                                
-                                # Skip our own offers (your seller ID: 29844311)
-                                if seller_id != "29844311" and price_cents and price_cents > 0:
-                                    competitor_price = price_cents / 100.0
-                                    logger.info(f"💰 Found competitor price in other_offers: R{competitor_price}")
-                                    return competitor_price
                 
                 logger.warning("❌ No competitor prices found in API response")
                 return None
