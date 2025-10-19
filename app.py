@@ -892,6 +892,7 @@ def debug_api_setup():
         'environment': os.getenv('RAILWAY_ENVIRONMENT', 'unknown')
     })
 
+@app.route('/debug-api-endpoints')
 def debug_api_endpoints():
     """Test multiple Takealot API endpoints"""
     api_key = os.getenv('TAKEALOT_API_KEY')
@@ -922,6 +923,7 @@ def debug_api_endpoints():
             results[endpoint] = f"Error: {str(e)}"
     
     return jsonify(results)
+
 
 @app.route('/debug-api-test')
 def debug_api_test():
