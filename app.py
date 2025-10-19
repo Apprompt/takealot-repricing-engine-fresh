@@ -469,13 +469,19 @@ class TakealotRepricingEngine:
         return new_price
 
     def update_price(self, offer_id, new_price):
-        """Update price on Takealot using the CORRECT API format from your working app"""
+        """Update price on Takealot using PLID identifier"""
         try:
             api_key = os.getenv('TAKEALOT_API_KEY')
             
-            # Use the CORRECT API format from your working app
             BASE_URL = "https://seller-api.takealot.com"
-            endpoint = f"{BASE_URL}/v2/offers/offer?identifier=PLID{offer_id}"
+            
+            # Use PLID identifier - try different endpoint variations
+            endpoint_variations = [
+                f"{BASE_URL}/v2/offers/offer?identifier=PLID{offer_id}",
+                f"{BASE_URL}/v1/offers/PLID{offer_id}",
+                f"{BASE_URL}/v1/offers/{offer_id}",
+                f"{BASE_URL}/v2/offers/PLID{offer_id}"
+            ]
             
             headers = {
                 "Authorization": f"Key {api_key}",
@@ -486,22 +492,34 @@ class TakealotRepricingEngine:
                 "selling_price": int(new_price)
             }
             
-            logger.info(f"🔑 Using CORRECT API format from working app")
-            logger.info(f"🌐 Endpoint: {endpoint}")
-            logger.info(f"📤 Payload: {payload}")
+            # Try each endpoint variation
+            for endpoint in endpoint_variations:
+                logger.info(f"🔑 Trying endpoint: {endpoint}")
+                logger.info(f"📤 Payload: {payload}")
+                
+                try:
+                    response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
+                    
+                    logger.info(f"📥 Response Status: {response.status_code}")
+                    logger.info(f"📥 Response Text: {response.text}")
+                    
+                    if response.status_code == 200:
+                        logger.info(f"✅ SUCCESS: Updated {offer_id} to R{new_price}")
+                        return True
+                    elif response.status_code == 404:
+                        logger.info(f"🔄 Endpoint {endpoint} not found, trying next...")
+                        continue
+                    else:
+                        logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
+                        # Don't continue to next if we got a different error (like 400, 401, etc.)
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error with endpoint {endpoint}: {e}")
+                    continue
             
-            # Use PATCH method like your working app
-            response = self.session.patch(endpoint, json=payload, headers=headers, timeout=30)
-            
-            logger.info(f"📥 Response Status: {response.status_code}")
-            logger.info(f"📥 Response Text: {response.text}")
-            
-            if response.status_code == 200:
-                logger.info(f"✅ SUCCESS: Updated {offer_id} to R{new_price}")
-                return True
-            else:
-                logger.error(f"❌ API update failed: {response.status_code} - {response.text}")
-                return False
+            logger.error(f"❌ All endpoint variations failed for PLID{offer_id}")
+            return False
                 
         except Exception as e:
             logger.error(f"❌ Price update failed: {e}")
@@ -1276,6 +1294,36 @@ def debug_api_simple():
             'credentials_available': bool(api_key),
             'using_correct_format': True
         })
+
+@app.route('/debug-plid-test/<offer_id>')
+def debug_plid_test(offer_id):
+    """Test PLID identifier specifically"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    BASE_URL = "https://seller-api.takealot.com"
+    
+    headers = {
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Test getting offer by PLID
+    endpoint = f"{BASE_URL}/v2/offers/offer?identifier=PLID{offer_id}"
+    
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=10)
+        return jsonify({
+            'endpoint': endpoint,
+            'status_code': response.status_code,
+            'response_text': response.text,
+            'plid_used': f"PLID{offer_id}"
+        })
+    except Exception as e:
+        return jsonify({
+            'endpoint': endpoint,
+            'error': str(e),
+            'plid_used': f"PLID{offer_id}"
+        })
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
