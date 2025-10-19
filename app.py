@@ -1362,7 +1362,57 @@ def update_price(self, offer_id, new_price):
     except Exception as e:
         logger.error(f"❌ Price update failed: {e}")
         return False
-
+@app.route('/debug-find-offer/<search_term>')
+def debug_find_offer(search_term):
+    """Search for offers to find the correct identifier"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    BASE_URL = "https://seller-api.takealot.com"
+    
+    headers = {
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get all offers and search for our product
+    endpoint = f"{BASE_URL}/v2/offers"
+    
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=10)
+        if response.status_code == 200:
+            offers_data = response.json()
+            all_offers = offers_data.get('offers', [])
+            
+            # Search for offers that might be our product
+            matching_offers = []
+            for offer in all_offers:
+                # Check various fields that might contain our product info
+                offer_info = {
+                    'offer_id': offer.get('offer_id'),
+                    'tsin_id': offer.get('tsin_id'),
+                    'sku': offer.get('sku'),
+                    'barcode': offer.get('barcode'),
+                    'title': offer.get('title'),
+                    'selling_price': offer.get('selling_price'),
+                    'status': offer.get('status')
+                }
+                
+                # Add if it matches our search term or looks relevant
+                matching_offers.append(offer_info)
+            
+            return jsonify({
+                'search_term': search_term,
+                'total_offers': len(all_offers),
+                'matching_offers': matching_offers[:10],  # First 10 offers
+                'note': 'Look for offer_id, sku, or barcode to use as identifier'
+            })
+        else:
+            return jsonify({
+                'error': f'API returned {response.status_code}',
+                'response_text': response.text
+            })
+            
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
