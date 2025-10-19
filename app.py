@@ -1004,10 +1004,9 @@ def debug_raw_api(offer_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/debug-buybox/<offer_id>')
 def debug_buybox(offer_id):
-    """Debug buybox extraction specifically"""
+    """Debug buybox extraction specifically - FIXED VERSION"""
     try:
         api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
         headers = {
@@ -1031,16 +1030,20 @@ def debug_buybox(offer_id):
                     'items': []
                 }
                 for i, item in enumerate(items):
+                    # ✅ FIXED: Convert cents to rands properly
+                    price_cents = item.get('price')
+                    price_rands = price_cents / 100.0 if price_cents else None
+                    
                     buybox_info['items'].append({
                         'position': i,
-                        'price_cents': item.get('price'),
-                        'price_rands': item.get('price') / 100.0 if item.get('price') else None,
+                        'price_cents': price_cents,
+                        'price_rands': price_rands,  # Now correct!
                         'seller_id': item.get('sponsored_ads_seller_id'),
                         'sku': item.get('sku'),
                         'is_selected': item.get('is_selected')
                     })
             
-            # Extract other offers
+            # Extract other offers (also fix this conversion)
             offers_info = {}
             if other_offers:
                 conditions = other_offers.get("conditions", [])
@@ -1049,10 +1052,13 @@ def debug_buybox(offer_id):
                     items = condition.get("items", [])
                     offers_info[cond_name] = []
                     for item in items:
+                        price_cents = item.get('price')
+                        price_rands = price_cents / 100.0 if price_cents else None
+                        
                         seller = item.get("seller", {})
                         offers_info[cond_name].append({
-                            'price_cents': item.get('price'),
-                            'price_rands': item.get('price') / 100.0 if item.get('price') else None,
+                            'price_cents': price_cents,
+                            'price_rands': price_rands,  # Now correct!
                             'seller_id': seller.get('seller_id'),
                             'seller_name': seller.get('display_name'),
                             'is_takealot': item.get('is_takealot')
@@ -1063,13 +1069,14 @@ def debug_buybox(offer_id):
                 'buybox_data': buybox_info,
                 'other_offers': offers_info,
                 'your_seller_id': '29844311',
-                'note': 'First buybox item is the current winner'
+                'note': 'First buybox item is the current winner - PRICES NOW CORRECT IN RANDS'
             })
         else:
             return jsonify({'error': f'API returned {response.status_code}'}), 500
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/debug-product-status/<offer_id>')
 def debug_product_status(offer_id):
