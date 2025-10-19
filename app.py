@@ -316,11 +316,10 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Fetch ACTUAL competitor price from Takealot - UPDATED FOR CURRENT API"""
+        """Fetch ACTUAL competitor price from Takealot - FIXED VERSION"""
         try:
             self._respect_rate_limit()
             
-            # Updated API endpoint with current structure
             api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -328,80 +327,69 @@ class TakealotRepricingEngine:
                 "Referer": f"https://www.takealot.com/",
             }
             
-            logger.info(f"🌐 Fetching UPDATED API: {api_url}")
+            logger.info(f"🌐 Fetching API: {api_url}")
             response = self.session.get(api_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
                 logger.info(f"✅ API response received")
                 
-                product = data.get("product", {})
+                # 🎯 CRITICAL: Extract buybox data from the correct structure
+                buybox = data.get("buybox", {})
                 
-                # 🎯 CRITICAL: Try multiple price locations in current API structure
-                price_candidates = []
-                
-                # Method 1: Core price data (most common)
-                core_price = product.get("core", {}).get("price") or product.get("price")
-                if core_price:
-                    # Handle both direct price objects and nested structures
-                    if isinstance(core_price, dict):
-                        selling_price = core_price.get("selling_price") or core_price.get("amount")
-                        if selling_price and selling_price > 0:
-                            price_rand = selling_price / 100.0
-                            price_candidates.append(price_rand)
-                            logger.info(f"💰 Core price found: R{price_rand}")
-                    else:
-                        # Direct price value
-                        price_rand = core_price / 100.0
-                        price_candidates.append(price_rand)
-                        logger.info(f"💰 Direct core price: R{price_rand}")
-                
-                # Method 2: Buybox data (your main requirement)
-                buybox = product.get("buybox", {}) or product.get("purchase_box", {})
                 if buybox:
-                    buybox_price = buybox.get("price") or buybox.get("current_price")
-                    if buybox_price and buybox_price > 0:
-                        price_rand = buybox_price / 100.0
-                        price_candidates.append(price_rand)
-                        logger.info(f"💰 Buybox price: R{price_rand}")
+                    # Get all buybox items
+                    buybox_items = buybox.get("items", [])
+                    logger.info(f"🔍 Found {len(buybox_items)} buybox items")
                     
-                    # 🎯 CHECK BUYBOX WINNER (CRITICAL FOR YOUR LOGIC)
-                    buybox_winner = buybox.get("seller_name") or buybox.get("seller_id")
-                    if buybox_winner:
-                        logger.info(f"🏆 Buybox winner: {buybox_winner}")
-                        # Check if WE are the buybox winner
-                        if "allbats" in str(buybox_winner).lower() or "29844311" in str(buybox_winner):
-                            logger.info("🎉 WE ARE THE BUYBOX WINNER - no adjustment needed")
-                            # Return a special value to indicate we own the buybox
-                            return "we_own_buybox"
+                    # Find the CURRENT buybox winner (first item in the list)
+                    if buybox_items:
+                        current_buybox = buybox_items[0]
+                        
+                        # 🎯 EXTRACT BUYBOX PRICE (in cents, convert to Rands)
+                        buybox_price_cents = current_buybox.get("price")
+                        buybox_seller_id = current_buybox.get("sponsored_ads_seller_id")
+                        buybox_sku = current_buybox.get("sku")
+                        
+                        logger.info(f"💰 Buybox price (cents): {buybox_price_cents}")
+                        logger.info(f"🏆 Buybox seller ID: {buybox_seller_id}")
+                        logger.info(f"📦 Buybox SKU: {buybox_sku}")
+                        
+                        if buybox_price_cents and buybox_price_cents > 0:
+                            buybox_price_rands = buybox_price_cents / 100.0
+                            logger.info(f"💰 Buybox price: R{buybox_price_rands}")
+                            
+                            # 🎯 CHECK IF WE OWN THE BUYBOX
+                            # Your seller ID is "29844311" - check if it matches
+                            if buybox_seller_id and ("29844311" in str(buybox_seller_id)):
+                                logger.info("🎉 WE OWN THE BUYBOX - no adjustment needed")
+                                return "we_own_buybox"
+                            else:
+                                logger.info(f"🏆 Competitor owns buybox: {buybox_seller_id}")
+                                return buybox_price_rands
+                    
+                    # If no buybox items found, try alternative price extraction
+                    logger.warning("⚠️ No buybox items found, trying alternative methods")
                 
-                # Method 3: Product variants
-                variants = product.get("variants", [])
-                for variant in variants:
-                    variant_price = variant.get("price") or variant.get("selling_price")
-                    if variant_price and variant_price > 0:
-                        price_rand = variant_price / 100.0
-                        price_candidates.append(price_rand)
-                        logger.info(f"💰 Variant price: R{price_rand}")
+                # 🎯 ALTERNATIVE: Check "other_offers" for competitor prices
+                other_offers = data.get("other_offers", {})
+                if other_offers:
+                    conditions = other_offers.get("conditions", [])
+                    for condition in conditions:
+                        if condition.get("condition") == "New":
+                            items = condition.get("items", [])
+                            for item in items:
+                                seller_id = item.get("seller", {}).get("seller_id")
+                                price_cents = item.get("price")
+                                
+                                # Skip our own offers (your seller ID: 29844311)
+                                if seller_id != "29844311" and price_cents and price_cents > 0:
+                                    competitor_price = price_cents / 100.0
+                                    logger.info(f"💰 Found competitor price in other_offers: R{competitor_price}")
+                                    return competitor_price
                 
-                # Method 4: Direct product price fields
-                direct_price_fields = ["selling_price", "current_price", "price", "amount"]
-                for field in direct_price_fields:
-                    price_val = product.get(field)
-                    if price_val and price_val > 0:
-                        price_rand = price_val / 100.0
-                        price_candidates.append(price_rand)
-                        logger.info(f"💰 {field} price: R{price_rand}")
-                
-                if price_candidates:
-                    lowest_price = min(price_candidates)
-                    logger.info(f"🏆 Selected competitor price: R{lowest_price}")
-                    return lowest_price
-                else:
-                    logger.warning("❌ No prices found in API response")
-                    # Log the actual API structure for debugging
-                    logger.info(f"🔍 API structure keys: {list(product.keys())}")
-                    return None
+                logger.warning("❌ No competitor prices found in API response")
+                return None
                     
             else:
                 logger.error(f"❌ API returned status: {response.status_code}")
@@ -996,6 +984,73 @@ def debug_raw_api(offer_id):
                 'status_code': response.status_code,
                 'response_text': response.text
             })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/debug-buybox/<offer_id>')
+def debug_buybox(offer_id):
+    """Debug buybox extraction specifically"""
+    try:
+        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            buybox = data.get("buybox", {})
+            other_offers = data.get("other_offers", {})
+            
+            # Extract buybox info
+            buybox_info = {}
+            if buybox:
+                items = buybox.get("items", [])
+                buybox_info = {
+                    'total_items': len(items),
+                    'items': []
+                }
+                for i, item in enumerate(items):
+                    buybox_info['items'].append({
+                        'position': i,
+                        'price_cents': item.get('price'),
+                        'price_rands': item.get('price') / 100.0 if item.get('price') else None,
+                        'seller_id': item.get('sponsored_ads_seller_id'),
+                        'sku': item.get('sku'),
+                        'is_selected': item.get('is_selected')
+                    })
+            
+            # Extract other offers
+            offers_info = {}
+            if other_offers:
+                conditions = other_offers.get("conditions", [])
+                for condition in conditions:
+                    cond_name = condition.get("condition")
+                    items = condition.get("items", [])
+                    offers_info[cond_name] = []
+                    for item in items:
+                        seller = item.get("seller", {})
+                        offers_info[cond_name].append({
+                            'price_cents': item.get('price'),
+                            'price_rands': item.get('price') / 100.0 if item.get('price') else None,
+                            'seller_id': seller.get('seller_id'),
+                            'seller_name': seller.get('display_name'),
+                            'is_takealot': item.get('is_takealot')
+                        })
+            
+            return jsonify({
+                'offer_id': offer_id,
+                'buybox_data': buybox_info,
+                'other_offers': offers_info,
+                'your_seller_id': '29844311',
+                'note': 'First buybox item is the current winner'
+            })
+        else:
+            return jsonify({'error': f'API returned {response.status_code}'}), 500
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
