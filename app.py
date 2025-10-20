@@ -169,18 +169,27 @@ class PriceMonitor:
         return product_id
 
     def _direct_scrape_price(self, offer_id):
-        """Direct price scraping for monitoring - WITH PLID FIX"""
+        """Direct price scraping for monitoring - WITH PROPER HEADERS"""
         try:
             # Convert to valid PLID format
             plid = self._convert_to_plid(offer_id)
             logger.info(f"🔍 Monitoring scraping {offer_id} → {plid}")
             
-            # Use the PLID in the API call
+            # Use the PLID in the API call with PROPER headers
             api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-                "Referer": f"https://www.takealot.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Referer": f"https://www.takealot.com/plid{plid.replace('PLID', '')}",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors", 
+                "Sec-Fetch-Site": "same-site",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
             }
             
             response = requests.get(api_url, headers=headers, timeout=15)
@@ -190,7 +199,7 @@ class PriceMonitor:
                 data = response.json()
                 product = data.get("product", {})
                 
-                # Your existing price extraction logic here...
+                # Your existing price extraction logic...
                 price_candidates = []
                 
                 # Buybox price
@@ -922,16 +931,27 @@ def debug_plid_conversion(product_id):
     """Test PLID conversion for a product ID"""
     plid = engine.price_monitor._convert_to_plid(product_id)
     
-    # Test if the converted PLID works
+    # Test if the converted PLID works WITH PROPER HEADERS
     test_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"https://www.takealot.com/plid{plid.replace('PLID', '')}",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    }
+    
     try:
-        response = requests.get(test_url, timeout=10)
+        response = requests.get(test_url, headers=headers, timeout=10)
         return jsonify({
             "original_id": product_id,
             "converted_plid": plid,
             "api_status_code": response.status_code,
-            "api_success": response.status_code == 200
+            "api_success": response.status_code == 200,
+            "response_preview": response.text[:200] if response.status_code != 200 else "Success"
         })
     except Exception as e:
         return jsonify({
