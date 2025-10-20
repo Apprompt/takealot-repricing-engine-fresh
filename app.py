@@ -149,36 +149,60 @@ class PriceMonitor:
                 if self.is_monitoring:
                     time.sleep(60)
 
+    def _convert_to_plid(self, product_id):
+        """Convert internal product ID to Takealot PLID format"""
+        # If it's already a PLID, return as-is
+        if str(product_id).startswith('PLID'):
+            return product_id
+        
+        # If it's a numeric ID, assume it needs PLID prefix
+        if str(product_id).isdigit():
+            return f"PLID{product_id}"
+        
+        # For other formats, try to extract numeric part
+        import re
+        numbers = re.findall(r'\d+', str(product_id))
+        if numbers:
+            return f"PLID{numbers[0]}"
+        
+        # Return original if no conversion possible
+        return product_id
+
     def _direct_scrape_price(self, offer_id):
-        """Direct price scraping for monitoring - FIXED VERSION"""
+        """Direct price scraping for monitoring - WITH PLID FIX"""
         try:
-            # Use the same API endpoint as the working engine
-            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+            # Convert to valid PLID format
+            plid = self._convert_to_plid(offer_id)
+            logger.info(f"🔍 Monitoring scraping {offer_id} → {plid}")
+            
+            # Use the PLID in the API call
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept": "application/json",
                 "Referer": f"https://www.takealot.com/",
             }
             
             response = requests.get(api_url, headers=headers, timeout=15)
+            logger.info(f"📊 API response for {plid}: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 product = data.get("product", {})
                 
-                # Use the same extraction logic as the working engine
+                # Your existing price extraction logic here...
                 price_candidates = []
                 
-                # Method 1: Buybox price
+                # Buybox price
                 buybox = product.get("buybox", {})
                 if buybox:
                     buybox_price = buybox.get("price")
                     if buybox_price and buybox_price > 0:
                         price_rand = buybox_price / 100.0
                         price_candidates.append(price_rand)
-                        logger.info(f"💰 Monitoring found buybox price: R{price_rand}")
+                        logger.info(f"💰 Found price for {plid}: R{price_rand}")
                 
-                # Method 2: Core price
+                # Core price
                 core_price = product.get("core", {}).get("price") or product.get("price")
                 if core_price:
                     if isinstance(core_price, dict):
@@ -186,26 +210,27 @@ class PriceMonitor:
                         if selling_price and selling_price > 0:
                             price_rand = selling_price / 100.0
                             price_candidates.append(price_rand)
-                            logger.info(f"💰 Monitoring found core price: R{price_rand}")
+                            logger.info(f"💰 Found core price for {plid}: R{price_rand}")
                     else:
                         price_rand = core_price / 100.0
                         price_candidates.append(price_rand)
-                        logger.info(f"💰 Monitoring found direct price: R{price_rand}")
+                        logger.info(f"💰 Found direct price for {plid}: R{price_rand}")
                 
                 if price_candidates:
                     lowest_price = min(price_candidates)
-                    logger.info(f"🏆 Monitoring selected price: R{lowest_price}")
+                    logger.info(f"🏆 Monitoring SUCCESS for {plid}: R{lowest_price}")
                     return lowest_price
                 
-                logger.warning(f"⚠️ Monitoring: No prices found for {offer_id}")
+                logger.warning(f"⚠️ No prices found for {plid}")
                 return None
             else:
-                logger.error(f"❌ Monitoring: API returned {response.status_code} for {offer_id}")
+                logger.error(f"❌ API {response.status_code} for {plid}")
                 return None
                 
         except Exception as e:
-            logger.error(f"❌ Monitoring scrape failed for {offer_id}: {e}")
+            logger.error(f"💥 Scrape failed for {offer_id}: {e}")
             return None
+
     
     def stop_monitoring(self):
         """Stop background monitoring"""
@@ -891,6 +916,29 @@ def debug_monitoring_health():
         'products_per_minute_estimate': len(engine.product_config) / 30 if monitor.is_monitoring else 0,
         'estimated_completion_time': f"{(len(engine.product_config) * 2) / 3600:.1f} hours" if monitor.is_monitoring else 'N/A'
     })
+
+@app.route('/debug-plid-conversion/<product_id>')
+def debug_plid_conversion(product_id):
+    """Test PLID conversion for a product ID"""
+    plid = engine.price_monitor._convert_to_plid(product_id)
+    
+    # Test if the converted PLID works
+    test_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+    
+    try:
+        response = requests.get(test_url, timeout=10)
+        return jsonify({
+            "original_id": product_id,
+            "converted_plid": plid,
+            "api_status_code": response.status_code,
+            "api_success": response.status_code == 200
+        })
+    except Exception as e:
+        return jsonify({
+            "original_id": product_id, 
+            "converted_plid": plid,
+            "error": str(e)
+        })
 
 @app.route('/debug-api-setup')
 def debug_api_setup():
