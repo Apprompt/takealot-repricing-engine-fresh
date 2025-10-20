@@ -833,6 +833,34 @@ def manual_update_price():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug-monitoring-health')
+def debug_monitoring_health():
+    """Check monitoring system health"""
+    monitor = engine.price_monitor
+    
+    # Check if thread is alive
+    thread_alive = monitor.monitoring_thread.is_alive() if monitor.monitoring_thread else False
+    
+    # Check recent activity
+    try:
+        with sqlite3.connect("price_monitor.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*), MAX(last_updated) FROM competitor_prices')
+            result = cursor.fetchone()
+            total_prices, last_updated = result
+    except:
+        total_prices, last_updated = 0, None
+    
+    return jsonify({
+        'monitoring_active': monitor.is_monitoring,
+        'thread_alive': thread_alive,
+        'total_products_configured': len(engine.product_config),
+        'total_prices_stored': total_prices,
+        'last_price_update': last_updated,
+        'products_per_minute_estimate': len(engine.product_config) / 30 if monitor.is_monitoring else 0,
+        'estimated_completion_time': f"{(len(engine.product_config) * 2) / 3600:.1f} hours" if monitor.is_monitoring else 'N/A'
+    })
+
 @app.route('/debug-api-setup')
 def debug_api_setup():
     """Debug API credentials and connection"""
