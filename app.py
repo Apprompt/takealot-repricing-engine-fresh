@@ -10,6 +10,7 @@ import hashlib
 import pandas as pd
 import sqlite3
 import threading
+import re
 
 print("🔍 DEBUG: Checking environment variables on startup...")
 print(f"TAKEALOT_API_KEY exists: {bool(os.getenv('TAKEALOT_API_KEY'))}")
@@ -149,30 +150,41 @@ class PriceMonitor:
                 if self.is_monitoring:
                     time.sleep(60)
 
-    def _convert_to_plid(self, product_id):
-        """Convert internal product ID to Takealot PLID format"""
-        # If it's already a PLID, return as-is
-        if str(product_id).startswith('PLID'):
-            return product_id
-        
-        # If it's a numeric ID, assume it needs PLID prefix
-        if str(product_id).isdigit():
-            return f"PLID{product_id}"
-        
-        # For other formats, try to extract numeric part
-        import re
-        numbers = re.findall(r'\d+', str(product_id))
-        if numbers:
-            return f"PLID{numbers[0]}"
-        
-        # Return original if no conversion possible
-        return product_id
+    def _extract_plid_from_url(self, product_url):
+        """Extract PLID from Takealot shortened URL"""
+        try:
+            # Handle format: https://www.takealot.com/x/PLID90609721
+            plid_match = re.search(r'/x/PLID(\d+)', product_url)
+            if plid_match:
+                plid = f"PLID{plid_match.group(1)}"
+                logger.debug(f"✅ Extracted PLID from shortened URL: {plid}")
+                return plid
+            
+            # Fallback: look for any PLID in URL
+            plid_match = re.search(r'/PLID(\d+)', product_url)
+            if plid_match:
+                plid = f"PLID{plid_match.group(1)}"
+                logger.debug(f"✅ Extracted PLID from full URL: {plid}")
+                return plid
+            
+            logger.warning(f"⚠️ Could not extract PLID from URL: {product_url}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ URL parsing failed for {product_url}: {e}")
+            return None
 
     def _direct_scrape_price(self, offer_id):
-        """Direct price scraping for monitoring - WITH PROPER HEADERS"""
+        """Direct price scraping for monitoring - USING PLID FROM URL"""
         try:
-            # Convert to valid PLID format
-            plid = self._convert_to_plid(offer_id)
+            # Get product config to find PLID from URL
+            product_info = engine.product_config.get(offer_id, {})
+            plid = product_info.get("plid")
+            
+            if not plid:
+                logger.warning(f"⚠️ No PLID mapping for product {offer_id}")
+                return None
+                
             logger.info(f"🔍 Monitoring scraping {offer_id} → {plid}")
             
             # Use the PLID in the API call with PROPER headers
@@ -183,7 +195,7 @@ class PriceMonitor:
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept-Encoding": "gzip, deflate, br",
                 "Connection": "keep-alive",
-                "Referer": f"https://www.takealot.com/plid{plid.replace('PLID', '')}",
+                "Referer": f"https://www.takealot.com/{plid.lower()}",
                 "Sec-Fetch-Dest": "empty",
                 "Sec-Fetch-Mode": "cors", 
                 "Sec-Fetch-Site": "same-site",
@@ -265,7 +277,7 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine with PROACTIVE MONITORING Initialized")
 
     def _load_product_config(self):
-        """Load product config with comprehensive debugging"""
+        """Load product config with new 4-column format and PLID extraction"""
         try:
             current_dir = os.getcwd()
             logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
@@ -283,25 +295,42 @@ class TakealotRepricingEngine:
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
                 
-                # ✅ Optional safety check
-                expected_cols = {"OfferID", "SellingPrice", "CostPrice"}
+                # ✅ NEW: Check for required columns in new format
+                expected_cols = {"offer_id", "product_url", "min_price", "max_price"}
                 missing = expected_cols - set(df.columns)
                 if missing:
                     logger.error(f"❌ Missing columns in CSV: {missing}")
+                    logger.error(f"❌ Found columns: {list(df.columns)}")
                     return {}
                 
                 logger.info(f"✅ Loaded CSV successfully with {len(df)} rows and columns {list(df.columns)}")
 
-                config_dict = {
-                    str(row["OfferID"]): {
-                        "selling_price": int(row["SellingPrice"]),
-                        "cost_price": int(row["CostPrice"])
+                config_dict = {}
+                plid_extraction_stats = {"success": 0, "failed": 0}
+                
+                for _, row in df.iterrows():
+                    offer_id = str(row["offer_id"])
+                    product_url = row["product_url"]
+                    
+                    # Extract PLID from URL
+                    plid = self.price_monitor._extract_plid_from_url(product_url)
+                    
+                    if plid:
+                        plid_extraction_stats["success"] += 1
+                    else:
+                        plid_extraction_stats["failed"] += 1
+                        logger.warning(f"⚠️ Could not extract PLID for {offer_id} from URL: {product_url}")
+                    
+                    config_dict[offer_id] = {
+                        "min_price": float(row["min_price"]),
+                        "max_price": float(row["max_price"]),
+                        "product_url": product_url,
+                        "plid": plid  # Store the extracted PLID
                     }
-                    for _, row in df.iterrows()
-                }
 
                 logger.info(f"🎉 SUCCESS: Loaded {len(config_dict)} products into config")
-                logger.info(f"🧾 All configured Offer IDs: {list(config_dict.keys())[:10]}")
+                logger.info(f"📊 PLID Extraction: {plid_extraction_stats['success']} successful, {plid_extraction_stats['failed']} failed")
+                logger.info(f"🧾 Sample products: {list(config_dict.keys())[:5]}")
 
                 return config_dict
             else:
@@ -322,14 +351,14 @@ class TakealotRepricingEngine:
             logger.warning("⚠️ No products configured for monitoring")
 
     def get_product_thresholds(self, offer_id):
-        """Get cost_price and selling_price for specific product"""
+        """Get min_price and max_price for specific product"""
         # Convert to string for lookup (since CSV keys are strings)
         offer_id_str = str(offer_id)
 
         if offer_id_str in self.product_config:
             config = self.product_config[offer_id_str]
-            logger.info(f"✅ Found config for {offer_id_str}: cost R{config.get('cost_price')}, selling R{config.get('selling_price')}")
-            return config.get('cost_price'), config.get('selling_price')
+            logger.info(f"✅ Found config for {offer_id_str}: min R{config.get('min_price')}, max R{config.get('max_price')}")
+            return config.get('min_price'), config.get('max_price')
         else:
             logger.warning(f"⚠️ No configuration found for '{offer_id_str}' - using fallback R500/R700")
             # Log first few product IDs for debugging
@@ -350,15 +379,21 @@ class TakealotRepricingEngine:
         return real_time_price, 'real_time_scraping'
 
     def get_competitor_price(self, offer_id):
-        """Get competitor price - try real scraping first, then fallbacks"""
+        """Get competitor price - comprehensive strategy with real scraping and monitoring fallback"""
         try:
-            # Check cache first
+            # 1. First try monitoring database (background monitoring)
+            stored_price = self.price_monitor.get_competitor_price(offer_id)
+            if stored_price is not None:
+                logger.info(f"💾 Using MONITORED price for {offer_id}: R{stored_price}")
+                return stored_price
+            
+            # 2. Check cache second
             cached_price = self._get_cached_price(offer_id)
             if cached_price is not None:
-                logger.info(f"💾 Using cached price for {offer_id}: R{cached_price}")
+                logger.info(f"💾 Using CACHED price for {offer_id}: R{cached_price}")
                 return cached_price
             
-            # Try REAL scraping first
+            # 3. Try REAL scraping third
             logger.info(f"🎯 Attempting REAL competitor price scraping for {offer_id}")
             real_price = self.get_real_competitor_price(offer_id)
             
@@ -370,7 +405,7 @@ class TakealotRepricingEngine:
                 # Special case: we own the buybox
                 return "we_own_buybox"
             else:
-                # Fallback to simulated scraping
+                # 4. Final fallback to simulated scraping
                 logger.info("🔄 Real scraping failed, using simulated data")
                 simulated_price = self._simulate_scraping(offer_id)
                 self._cache_price(offer_id, simulated_price)
@@ -381,19 +416,27 @@ class TakealotRepricingEngine:
             return self._get_fallback_price(offer_id)
 
     def get_real_competitor_price(self, offer_id):
-        """Fetch ACTUAL competitor price from Takealot - UPDATED FOR CURRENT API"""
+        """Fetch ACTUAL competitor price from Takealot - USING PLID FROM URL"""
         try:
             self._respect_rate_limit()
             
-            # Updated API endpoint with current structure
-            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+            # Get PLID from product config (extracted from URL)
+            product_info = self.product_config.get(str(offer_id), {})
+            plid = product_info.get("plid")
+            
+            if not plid:
+                logger.warning(f"⚠️ No PLID available for {offer_id}")
+                return None
+            
+            # Use the PLID from URL in API call
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "application/json",
-                "Referer": f"https://www.takealot.com/",
+                "Referer": f"https://www.takealot.com/{plid.lower()}",
             }
             
-            logger.info(f"🌐 Fetching UPDATED API: {api_url}")
+            logger.info(f"🌐 Fetching API with PLID from URL: {api_url}")
             response = self.session.get(api_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
@@ -481,15 +524,15 @@ class TakealotRepricingEngine:
     def calculate_optimal_price(self, my_price, competitor_price, offer_id):
         """YOUR EXACT BUSINESS LOGIC with buybox detection"""
         # Get thresholds for THIS specific product
-        cost_price, selling_price = self.get_product_thresholds(offer_id)
+        min_price, max_price = self.get_product_thresholds(offer_id)
         
         # Convert to integers (whole numbers) for Takealot
         my_price = int(my_price)
-        cost_price = int(cost_price)
-        selling_price = int(selling_price)
+        min_price = int(min_price)
+        max_price = int(max_price)
         
         logger.info(f"🧮 Calculating price for {offer_id}")
-        logger.info(f"   My price: R{my_price}, Cost: R{cost_price}, Selling: R{selling_price}")
+        logger.info(f"   My price: R{my_price}, Min: R{min_price}, Max: R{max_price}")
         
         # 🎯 CRITICAL: Check if we own the buybox
         if competitor_price == "we_own_buybox":
@@ -500,23 +543,28 @@ class TakealotRepricingEngine:
         competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else None
         
         if not competitor_price or competitor_price <= 0:
-            logger.warning("⚠️ No valid competitor price - using selling price")
-            return selling_price
+            logger.warning("⚠️ No valid competitor price - using max price")
+            return max_price
         
         logger.info(f"   Competitor buybox price: R{competitor_price}")
         
-        # RULE 1: If competitor below THIS PRODUCT'S cost, revert to THIS PRODUCT'S selling price
-        if competitor_price < cost_price:
-            logger.info(f"   🔄 REVERT: Competitor R{competitor_price} below cost R{cost_price} → R{selling_price}")
-            return selling_price
+        # RULE 1: If competitor below THIS PRODUCT'S min price, revert to THIS PRODUCT'S max price
+        if competitor_price < min_price:
+            logger.info(f"   🔄 REVERT: Competitor R{competitor_price} below min R{min_price} → R{max_price}")
+            return max_price
         
         # RULE 2: Always be R1 below competitor (whole numbers)
         new_price = competitor_price - 1
         
-        # Safety check: don't go below cost
-        if new_price < cost_price:
-            logger.info(f"   ⚠️ ADJUSTMENT: R{new_price} below cost R{cost_price} → R{selling_price}")
-            return selling_price
+        # Safety check: don't go below min price
+        if new_price < min_price:
+            logger.info(f"   ⚠️ ADJUSTMENT: R{new_price} below min R{min_price} → R{max_price}")
+            return max_price
+        
+        # Safety check: don't go above max price
+        if new_price > max_price:
+            logger.info(f"   ⚠️ ADJUSTMENT: R{new_price} above max R{max_price} → R{max_price}")
+            return max_price
         
         logger.info(f"   📉 ADJUST: R1 below competitor R{competitor_price} → R{new_price}")
         return new_price
@@ -929,7 +977,7 @@ def debug_monitoring_health():
 @app.route('/debug-plid-conversion/<product_id>')
 def debug_plid_conversion(product_id):
     """Test PLID conversion for a product ID"""
-    plid = engine.price_monitor._convert_to_plid(product_id)
+    plid = engine.price_monitor._extract_plid_from_url(product_id)
     
     # Test if the converted PLID works WITH PROPER HEADERS
     test_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
@@ -959,6 +1007,21 @@ def debug_plid_conversion(product_id):
             "converted_plid": plid,
             "error": str(e)
         })
+
+@app.route('/debug-product-info/<offer_id>')
+def debug_product_info(offer_id):
+    """Debug product information and PLID extraction"""
+    product_info = engine.product_config.get(offer_id, {})
+    
+    return jsonify({
+        "offer_id": offer_id,
+        "product_info": product_info,
+        "plid_valid": product_info.get("plid") is not None,
+        "has_min_price": "min_price" in product_info,
+        "has_max_price": "max_price" in product_info,
+        "product_url": product_info.get("product_url", "MISSING"),
+        "extracted_plid": product_info.get("plid", "NOT_EXTRACTED")
+    })
 
 @app.route('/debug-api-setup')
 def debug_api_setup():
@@ -1039,7 +1102,11 @@ def debug_fix_check():
 def debug_raw_api(offer_id):
     """Get raw API response to see actual structure"""
     try:
-        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
+        # Get PLID from product config
+        product_info = engine.product_config.get(offer_id, {})
+        plid = product_info.get("plid", f"PLID{offer_id}")
+        
+        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
@@ -1052,6 +1119,7 @@ def debug_raw_api(offer_id):
             return jsonify({
                 'status': 'success',
                 'offer_id': offer_id,
+                'plid_used': plid,
                 'api_structure': data,
                 'product_keys': list(data.get('product', {}).keys()) if data.get('product') else []
             })
@@ -1072,7 +1140,7 @@ def debug_product_status(offer_id):
         competitor_price, source = engine.get_competitor_price_instant(offer_id)
         
         # Get your product config
-        cost_price, selling_price = engine.get_product_thresholds(offer_id)
+        min_price, max_price = engine.get_product_thresholds(offer_id)
         
         # Calculate what price should be set
         optimal_price = engine.calculate_optimal_price(743, competitor_price, offer_id)  # Using 743 as current
@@ -1081,11 +1149,11 @@ def debug_product_status(offer_id):
             'offer_id': offer_id,
             'competitor_price': competitor_price,
             'competitor_source': source,
-            'your_cost_price': cost_price,
-            'your_selling_price': selling_price,
+            'your_min_price': min_price,
+            'your_max_price': max_price,
             'calculated_optimal_price': optimal_price,
             'business_logic_applied': describe_business_rule(743, competitor_price, optimal_price),
-            'expected_action': 'REVERT_TO_SELLING' if competitor_price < cost_price else 'R1_BELOW_COMPETITOR'
+            'expected_action': 'REVERT_TO_MAX' if competitor_price < min_price else 'R1_BELOW_COMPETITOR'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1348,7 +1416,7 @@ def test_price_update(offer_id, new_price):
             return jsonify({'error': 'Price must be between R1 and R5000 for testing'}), 400
         
         # Get actual thresholds for info (but don't restrict)
-        cost_price, selling_price = engine.get_product_thresholds(offer_id)
+        min_price, max_price = engine.get_product_thresholds(offer_id)
         
         success = engine.update_price_with_retry(offer_id, new_price)
         
@@ -1357,8 +1425,8 @@ def test_price_update(offer_id, new_price):
             'new_price': new_price,
             'update_success': success,
             'test_note': 'THIS IS A REAL API CALL - price will actually change on Takealot!',
-            'your_cost_price': cost_price,
-            'your_selling_price': selling_price,
+            'your_min_price': min_price,
+            'your_max_price': max_price,
             'warning': 'This is a REAL price update on Takealot - use carefully!'
         })
     except Exception as e:
@@ -1367,8 +1435,8 @@ def test_price_update(offer_id, new_price):
 def describe_business_rule(my_price, competitor_price, optimal_price):
     """Describe which business rule was applied"""
     # Get thresholds for the specific product (simplified for this function)
-    COST_PRICE = 515  # Default fallback (WHOLE NUMBER)
-    SELLING_PRICE = 714  # Default fallback (WHOLE NUMBER)
+    MIN_PRICE = 500  # Default fallback (WHOLE NUMBER)
+    MAX_PRICE = 700  # Default fallback (WHOLE NUMBER)
     
     my_price = int(my_price)
     optimal_price = int(optimal_price)
@@ -1378,8 +1446,8 @@ def describe_business_rule(my_price, competitor_price, optimal_price):
     
     competitor_price = int(competitor_price) if competitor_price and competitor_price != "we_own_buybox" else 0
     
-    if competitor_price < COST_PRICE:
-        return f"REVERT_TO_SELLING - Competitor R{competitor_price} < Cost R{COST_PRICE}"
+    if competitor_price < MIN_PRICE:
+        return f"REVERT_TO_MAX - Competitor R{competitor_price} < Min R{MIN_PRICE}"
     else:
         return f"R1_BELOW_COMPETITOR - Optimal price R{optimal_price} = Competitor R{competitor_price} - R1"
 
