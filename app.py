@@ -150,30 +150,61 @@ class PriceMonitor:
                     time.sleep(60)
 
     def _direct_scrape_price(self, offer_id):
-        """Direct price scraping for monitoring (avoids circular references)"""
+        """Direct price scraping for monitoring - FIXED VERSION"""
         try:
-            # Simple direct API call
+            # Use the same API endpoint as the working engine
             api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/PLID{offer_id}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "application/json",
+                "Referer": f"https://www.takealot.com/",
             }
             
             response = requests.get(api_url, headers=headers, timeout=15)
+            
             if response.status_code == 200:
                 data = response.json()
                 product = data.get("product", {})
                 
-                # Simple price extraction
-                price = (product.get("buybox", {}).get("price") or 
-                        product.get("selling_price") or 
-                        product.get("core_price", {}).get("selling_price"))
+                # Use the same extraction logic as the working engine
+                price_candidates = []
                 
-                if price and price > 0:
-                    return price / 100.0  # Convert cents to rands
-            return None
+                # Method 1: Buybox price
+                buybox = product.get("buybox", {})
+                if buybox:
+                    buybox_price = buybox.get("price")
+                    if buybox_price and buybox_price > 0:
+                        price_rand = buybox_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Monitoring found buybox price: R{price_rand}")
+                
+                # Method 2: Core price
+                core_price = product.get("core", {}).get("price") or product.get("price")
+                if core_price:
+                    if isinstance(core_price, dict):
+                        selling_price = core_price.get("selling_price") or core_price.get("amount")
+                        if selling_price and selling_price > 0:
+                            price_rand = selling_price / 100.0
+                            price_candidates.append(price_rand)
+                            logger.info(f"💰 Monitoring found core price: R{price_rand}")
+                    else:
+                        price_rand = core_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Monitoring found direct price: R{price_rand}")
+                
+                if price_candidates:
+                    lowest_price = min(price_candidates)
+                    logger.info(f"🏆 Monitoring selected price: R{lowest_price}")
+                    return lowest_price
+                
+                logger.warning(f"⚠️ Monitoring: No prices found for {offer_id}")
+                return None
+            else:
+                logger.error(f"❌ Monitoring: API returned {response.status_code} for {offer_id}")
+                return None
+                
         except Exception as e:
-            logger.error(f"❌ Direct scrape failed for {offer_id}: {e}")
+            logger.error(f"❌ Monitoring scrape failed for {offer_id}: {e}")
             return None
     
     def stop_monitoring(self):
