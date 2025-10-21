@@ -277,7 +277,7 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine with PROACTIVE MONITORING Initialized")
 
     def _load_product_config(self):
-        """Load product config - FLEXIBLE COLUMN NAMES VERSION"""
+        """Load product config with new 4-column format - FIXED VERSION"""
         try:
             current_dir = os.getcwd()
             logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
@@ -288,47 +288,25 @@ class TakealotRepricingEngine:
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
                 
-                # 🎯 FLEXIBLE COLUMN MAPPING - handle different column names
-                column_mapping = {}
+                # ✅ Check for required columns in new format
+                expected_cols = {"offer_id", "product_url", "min_price", "max_price"}
+                actual_cols = set(df.columns)
                 
-                # Map possible column names to expected names
-                possible_columns = {
-                    'offer_id': ['offer_id', 'OfferID', 'offerid', 'id', 'ID'],
-                    'product_url': ['product_url', 'ProductURL', 'url', 'URL', 'link'],
-                    'min_price': ['min_price', 'MinPrice', 'minprice', 'min', 'Min'],
-                    'max_price': ['max_price', 'MaxPrice', 'maxprice', 'max', 'Max']
-                }
+                logger.info(f"📋 Actual columns: {actual_cols}")
+                logger.info(f"📋 Expected columns: {expected_cols}")
                 
-                # Find which columns exist in the CSV
-                actual_columns = list(df.columns)
-                logger.info(f"📋 Actual CSV columns: {actual_columns}")
-                
-                for expected_col, possible_names in possible_columns.items():
-                    for possible_name in possible_names:
-                        if possible_name in actual_columns:
-                            column_mapping[expected_col] = possible_name
-                            logger.info(f"✅ Mapped {possible_name} → {expected_col}")
-                            break
-                
-                # Check if we found all required columns
-                missing_columns = set(possible_columns.keys()) - set(column_mapping.keys())
-                if missing_columns:
-                    logger.error(f"❌ Missing columns after mapping: {missing_columns}")
-                    logger.error(f"❌ Available columns: {actual_columns}")
+                if expected_cols != actual_cols:
+                    logger.error(f"❌ Column mismatch! Expected: {expected_cols}, Got: {actual_cols}")
                     return {}
                 
-                logger.info(f"✅ Column mapping successful: {column_mapping}")
-                logger.info(f"✅ Loaded CSV with {len(df)} rows")
-                
+                logger.info(f"✅ Loaded CSV successfully with {len(df)} rows and columns {list(df.columns)}")
+
                 config_dict = {}
                 plid_extraction_stats = {"success": 0, "failed": 0}
                 
                 for _, row in df.iterrows():
-                    # Use the mapped column names
-                    offer_id = str(row[column_mapping['offer_id']])
-                    product_url = row[column_mapping['product_url']]
-                    min_price = float(row[column_mapping['min_price']])
-                    max_price = float(row[column_mapping['max_price']])
+                    offer_id = str(row["offer_id"])
+                    product_url = row["product_url"]
                     
                     # Extract PLID from URL
                     plid = self.price_monitor._extract_plid_from_url(product_url)
@@ -340,18 +318,19 @@ class TakealotRepricingEngine:
                         logger.warning(f"⚠️ Could not extract PLID for {offer_id} from URL: {product_url}")
                     
                     config_dict[offer_id] = {
-                        "min_price": min_price,
-                        "max_price": max_price,
+                        "min_price": float(row["min_price"]),
+                        "max_price": float(row["max_price"]),
                         "product_url": product_url,
-                        "plid": plid
+                        "plid": plid  # Store the extracted PLID
                     }
 
                 logger.info(f"🎉 SUCCESS: Loaded {len(config_dict)} products into config")
                 logger.info(f"📊 PLID Extraction: {plid_extraction_stats['success']} successful, {plid_extraction_stats['failed']} failed")
-                
+                logger.info(f"🧾 Sample products: {list(config_dict.keys())[:5]}")
+
                 return config_dict
             else:
-                logger.error("❌ CRITICAL: products_config.csv NOT FOUND!")
+                logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
                 return {}
         except Exception as e:
             logger.error(f"❌ CRITICAL ERROR loading product config: {e}")
@@ -368,7 +347,7 @@ class TakealotRepricingEngine:
             logger.warning("⚠️ No products configured for monitoring")
 
     def get_product_thresholds(self, offer_id):
-        """Get min_price and max_price for specific product"""
+        """Get min_price and max_price for specific product - UPDATED"""
         # Convert to string for lookup (since CSV keys are strings)
         offer_id_str = str(offer_id)
 
@@ -378,10 +357,7 @@ class TakealotRepricingEngine:
             return config.get('min_price'), config.get('max_price')
         else:
             logger.warning(f"⚠️ No configuration found for '{offer_id_str}' - using fallback R500/R700")
-            # Log first few product IDs for debugging
-            sample_ids = list(self.product_config.keys())[:3]
-            logger.info(f"📋 Sample configured IDs: {sample_ids}")
-            return 500, 700  # Fallback values (WHOLE NUMBERS)
+            return 500, 700  # Fallback values
 
     def get_competitor_price_instant(self, offer_id):
         """INSTANT competitor price lookup from database"""
