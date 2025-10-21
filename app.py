@@ -745,24 +745,55 @@ def list_products():
 
 @app.route('/debug-real-scrape/<offer_id>')
 def debug_real_scrape(offer_id):
-    """Test real scraping for a product"""
+    """Test real scraping for a product with detailed debugging"""
     if not engine:
         return jsonify({'error': 'Engine not initialized'}), 500
     
     try:
-        logger.info(f"🔍 Testing real scrape for {offer_id}")
+        # Get product info
+        product_info = engine.product_config.get(offer_id, {})
+        plid = product_info.get('plid')
+        
+        if not plid:
+            return jsonify({
+                'error': 'No PLID found',
+                'offer_id': offer_id,
+                'product_info': product_info
+            })
+        
+        # Try to fetch from API
+        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.takealot.com/{plid.lower()}",
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        # Get the actual scrape result
         real_price = engine._scrape_real_competitor_price(offer_id)
         
         return jsonify({
             'offer_id': offer_id,
+            'plid': plid,
+            'api_url': api_url,
+            'api_status_code': response.status_code,
+            'api_response_length': len(response.text),
+            'api_response_preview': response.text[:500] if response.text else 'empty',
             'real_scrape_result': real_price,
             'scrape_successful': real_price is not None and real_price != "we_own_buybox",
             'we_own_buybox': real_price == "we_own_buybox",
-            'product_url': engine.product_config.get(offer_id, {}).get('product_url'),
-            'plid': engine.product_config.get(offer_id, {}).get('plid')
+            'product_url': product_info.get('product_url')
         })
     except Exception as e:
-        return jsonify({'error': str(e), 'offer_id': offer_id}), 500
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'offer_id': offer_id
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
