@@ -300,15 +300,32 @@ class TakealotRepricingEngine:
     def get_competitor_price(self, offer_id):
         """Get competitor price with fallback"""
         try:
+            # 1. Check stored price first
             stored_price = self.price_monitor.get_competitor_price(offer_id)
             if stored_price is not None:
+                logger.info(f"💾 Using stored price for {offer_id}: R{stored_price}")
                 return stored_price
             
+            # 2. Check cache
             cached_price = self._get_cached_price(offer_id)
             if cached_price is not None:
+                logger.info(f"💾 Using cached price for {offer_id}: R{cached_price}")
                 return cached_price
             
-            # Fallback to simulation
+            # 3. Try REAL scraping
+            logger.info(f"🌐 Attempting REAL scraping for {offer_id}")
+            real_price = self._scrape_real_competitor_price(offer_id)
+            
+            if real_price and real_price > 0:
+                self._cache_price(offer_id, real_price)
+                # Also store in database for future use
+                self.price_monitor.store_competitor_price(offer_id, real_price, "real_time_scraping")
+                return real_price
+            elif real_price == "we_own_buybox":
+                return "we_own_buybox"
+            
+            # 4. Fallback to simulation
+            logger.warning(f"⚠️ Real scraping failed for {offer_id}, using simulation")
             simulated_price = self._simulate_scraping(offer_id)
             self._cache_price(offer_id, simulated_price)
             return simulated_price
@@ -316,6 +333,106 @@ class TakealotRepricingEngine:
         except Exception as e:
             logger.error(f"❌ All price methods failed: {e}")
             return self._get_fallback_price(offer_id)
+
+    def _scrape_real_competitor_price(self, offer_id):
+        """Scrape actual competitor price from Takealot API"""
+        try:
+            # Get product info
+            product_info = self.product_config.get(str(offer_id), {})
+            plid = product_info.get('plid')
+            
+            if not plid:
+                logger.warning(f"⚠️ No PLID for {offer_id}")
+                return None
+            
+            # Rate limiting
+            self._respect_rate_limit()
+            
+            # Call Takealot API
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": f"https://www.takealot.com/{plid.lower()}",
+            }
+            
+            logger.info(f"🌐 Fetching: {api_url}")
+            response = self.session.get(api_url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                logger.error(f"❌ API returned {response.status_code}")
+                return None
+            
+            data = response.json()
+            product = data.get("product", {})
+            
+            # Extract prices from multiple locations
+            price_candidates = []
+            
+            # Method 1: Buybox price
+            buybox = product.get("buybox", {})
+            if buybox:
+                buybox_price = buybox.get("price")
+                if buybox_price and buybox_price > 0:
+                    price_rand = buybox_price / 100.0
+                    price_candidates.append(price_rand)
+                    logger.info(f"💰 Buybox price: R{price_rand}")
+                
+                # Check if we own the buybox
+                seller_id = buybox.get("seller_id") or buybox.get("seller_name", "")
+                if seller_id and (str(seller_id) == "29844311" or "allbats" in str(seller_id).lower()):
+                    logger.info("🎉 WE OWN THE BUYBOX!")
+                    return "we_own_buybox"
+            
+            # Method 2: Core price
+            core = product.get("core", {})
+            if core:
+                core_price = core.get("price") or core.get("current_price")
+                if isinstance(core_price, dict):
+                    selling_price = core_price.get("selling_price") or core_price.get("amount")
+                    if selling_price and selling_price > 0:
+                        price_rand = selling_price / 100.0
+                        price_candidates.append(price_rand)
+                        logger.info(f"💰 Core price: R{price_rand}")
+                elif core_price and core_price > 0:
+                    price_rand = core_price / 100.0
+                    price_candidates.append(price_rand)
+                    logger.info(f"💰 Core price: R{price_rand}")
+            
+            # Method 3: Direct price fields
+            for field in ["price", "selling_price", "current_price"]:
+                price_val = product.get(field)
+                if price_val and price_val > 0:
+                    price_rand = price_val / 100.0
+                    price_candidates.append(price_rand)
+                    logger.info(f"💰 {field}: R{price_rand}")
+            
+            if price_candidates:
+                lowest_price = min(price_candidates)
+                logger.info(f"🎯 Selected competitor price: R{lowest_price}")
+                return lowest_price
+            
+            logger.warning(f"⚠️ No prices found in API response")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Real scraping failed: {e}")
+            import traceback
+            logger.error(f"Stack trace: {traceback.format_exc()}")
+            return None
+
+    def _respect_rate_limit(self):
+        """Respect rate limiting between API calls"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last + random.uniform(0.5, 1.5)
+            logger.info(f"⏳ Rate limiting: sleeping {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
 
     def calculate_optimal_price(self, my_price, competitor_price, offer_id):
         """Calculate optimal price using business logic"""
@@ -625,6 +742,27 @@ def list_products():
         'showing': len(products),
         'products': products
     })
+
+@app.route('/debug-real-scrape/<offer_id>')
+def debug_real_scrape(offer_id):
+    """Test real scraping for a product"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    try:
+        logger.info(f"🔍 Testing real scrape for {offer_id}")
+        real_price = engine._scrape_real_competitor_price(offer_id)
+        
+        return jsonify({
+            'offer_id': offer_id,
+            'real_scrape_result': real_price,
+            'scrape_successful': real_price is not None and real_price != "we_own_buybox",
+            'we_own_buybox': real_price == "we_own_buybox",
+            'product_url': engine.product_config.get(offer_id, {}).get('product_url'),
+            'plid': engine.product_config.get(offer_id, {}).get('plid')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'offer_id': offer_id}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
