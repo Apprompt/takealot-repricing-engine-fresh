@@ -795,6 +795,59 @@ def debug_real_scrape(offer_id):
             'offer_id': offer_id
         }), 500
 
+@app.route('/debug-api-structure/<offer_id>')
+def debug_api_structure(offer_id):
+    """See the full API response structure to find price fields"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    try:
+        product_info = engine.product_config.get(offer_id, {})
+        plid = product_info.get('plid')
+        
+        if not plid:
+            return jsonify({'error': 'No PLID found'})
+        
+        api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"https://www.takealot.com/{plid.lower()}",
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract key sections
+            product = data.get("product", {}) if "product" in data else data
+            
+            return jsonify({
+                'offer_id': offer_id,
+                'plid': plid,
+                'top_level_keys': list(data.keys()),
+                'product_keys': list(product.keys()) if product else [],
+                'buybox': product.get('buybox'),
+                'core': product.get('core'),
+                'pricing': product.get('pricing'),
+                'purchase_box': product.get('purchase_box'),
+                'offers': product.get('offers'),
+                'full_response': data  # Full response for inspection
+            })
+        else:
+            return jsonify({
+                'error': f'API returned {response.status_code}',
+                'response': response.text[:1000]
+            })
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting app on port {port}")
