@@ -990,36 +990,54 @@ def debug_csv_columns():
 
 @app.route('/debug-plid-conversion/<product_id>')
 def debug_plid_conversion(product_id):
-    """Test PLID conversion for a product ID"""
-    plid = engine.price_monitor._extract_plid_from_url(product_id)
-    
-    # Test if the converted PLID works WITH PROPER HEADERS
-    test_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": f"https://www.takealot.com/plid{plid.replace('PLID', '')}",
-        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-    
+    """Test PLID extraction for a product - FIXED VERSION"""
     try:
+        # Get the product URL from config first
+        product_info = engine.product_config.get(product_id, {})
+        product_url = product_info.get("product_url")
+        
+        if not product_url:
+            return jsonify({
+                "error": f"No product URL found for {product_id}",
+                "available_products": list(engine.product_config.keys())[:5] if engine.product_config else "none",
+                "product_config_count": len(engine.product_config)
+            })
+        
+        # Extract PLID from the actual URL
+        plid = engine.price_monitor._extract_plid_from_url(product_url)
+        
+        if not plid:
+            return jsonify({
+                "error": f"Could not extract PLID from URL: {product_url}",
+                "product_id": product_id,
+                "product_url": product_url
+            })
+        
+        # Test if the PLID works
+        test_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.takealot.com/{plid.lower()}",
+        }
+        
         response = requests.get(test_url, headers=headers, timeout=10)
         return jsonify({
-            "original_id": product_id,
-            "converted_plid": plid,
+            "product_id": product_id,
+            "product_url": product_url,
+            "extracted_plid": plid,
             "api_status_code": response.status_code,
             "api_success": response.status_code == 200,
             "response_preview": response.text[:200] if response.status_code != 200 else "Success"
         })
     except Exception as e:
         return jsonify({
-            "original_id": product_id, 
-            "converted_plid": plid,
-            "error": str(e)
+            "error": str(e),
+            "product_id": product_id,
+            "product_config_available": bool(engine.product_config),
+            "product_count": len(engine.product_config) if engine.product_config else 0
         })
 
 @app.route('/debug-product-info/<offer_id>')
