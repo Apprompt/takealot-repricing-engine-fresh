@@ -561,6 +561,71 @@ def test_endpoint(offer_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug-product-info/<offer_id>')
+def debug_product_info(offer_id):
+    """Debug product information"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    product_info = engine.product_config.get(offer_id, {})
+    
+    return jsonify({
+        "offer_id": offer_id,
+        "found_in_config": offer_id in engine.product_config,
+        "product_info": product_info,
+        "total_products_loaded": len(engine.product_config),
+        "sample_offer_ids": list(engine.product_config.keys())[:10]
+    })
+
+@app.route('/search-product/<search_term>')
+def search_product(search_term):
+    """Search for products containing term"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    matching = []
+    for offer_id, config in engine.product_config.items():
+        if search_term in offer_id or search_term in config.get('product_url', ''):
+            matching.append({
+                'offer_id': offer_id,
+                'product_url': config.get('product_url'),
+                'min_price': config.get('min_price'),
+                'max_price': config.get('max_price'),
+                'plid': config.get('plid')
+            })
+            if len(matching) >= 20:  # Limit results
+                break
+    
+    return jsonify({
+        'search_term': search_term,
+        'matches_found': len(matching),
+        'results': matching
+    })
+
+@app.route('/list-products')
+def list_products():
+    """List first 50 products"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    products = []
+    for i, (offer_id, config) in enumerate(engine.product_config.items()):
+        if i >= 50:
+            break
+        products.append({
+            'offer_id': offer_id,
+            'product_url': config.get('product_url'),
+            'min_price': config.get('min_price'),
+            'max_price': config.get('max_price'),
+            'plid': config.get('plid')
+        })
+    
+    return jsonify({
+        'total_products': len(engine.product_config),
+        'showing': len(products),
+        'products': products
+    })
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting app on port {port}")
