@@ -32,8 +32,9 @@ MONITORING_INTERVAL_MINUTES = 30
 MIN_REQUEST_INTERVAL = 3.0
 
 class PriceMonitor:
-    def __init__(self):
+    def __init__(self, engine_ref=None):
         self.db_file = "price_monitor.db"
+        self.engine_ref = engine_ref  # Store reference to engine
         self._init_database()
         self.monitoring_thread = None
         self.is_monitoring = False
@@ -175,14 +176,24 @@ class PriceMonitor:
             return None
 
     def _direct_scrape_price(self, offer_id):
-        """Direct price scraping for monitoring - USING PLID FROM URL"""
+        """Direct price scraping for monitoring - AVOIDING CIRCULAR REFERENCES"""
         try:
-            # Get product config to find PLID from URL
-            product_info = engine.product_config.get(offer_id, {})
-            plid = product_info.get("plid")
+            # Get product config from engine reference (if available)
+            if not self.engine_ref:
+                logger.warning(f"⚠️ No engine reference for {offer_id}")
+                return None
+                
+            product_info = self.engine_ref.product_config.get(offer_id, {})
+            product_url = product_info.get("product_url")
             
+            if not product_url:
+                logger.warning(f"⚠️ No product URL for {offer_id}")
+                return None
+            
+            # Extract PLID from URL at runtime
+            plid = self._extract_plid_from_url(product_url)
             if not plid:
-                logger.warning(f"⚠️ No PLID mapping for product {offer_id}")
+                logger.warning(f"⚠️ Could not extract PLID from: {product_url}")
                 return None
                 
             logger.info(f"🔍 Monitoring scraping {offer_id} → {plid}")
@@ -251,7 +262,6 @@ class PriceMonitor:
         except Exception as e:
             logger.error(f"💥 Scrape failed for {offer_id}: {e}")
             return None
-
     
     def stop_monitoring(self):
         """Stop background monitoring"""
@@ -272,7 +282,7 @@ class TakealotRepricingEngine:
         self.product_config = self._load_product_config()
         
         # Initialize price monitor
-        self.price_monitor = PriceMonitor()
+        self.price_monitor = PriceMonitor(engine_ref=self)
         
         logger.info("🚀 Takealot Repricing Engine with PROACTIVE MONITORING Initialized")
 
