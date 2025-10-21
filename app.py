@@ -277,17 +277,10 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine with PROACTIVE MONITORING Initialized")
 
     def _load_product_config(self):
-        """Load product config with new 4-column format and PLID extraction"""
+        """Load product config - FLEXIBLE COLUMN NAMES VERSION"""
         try:
             current_dir = os.getcwd()
             logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
-
-            # List all files in current directory
-            try:
-                files = os.listdir('.')
-                logger.info(f"📁 Files in directory ({len(files)} total): {files}")
-            except Exception as e:
-                logger.error(f"❌ Cannot list directory: {e}")
 
             file_path = 'products_config.csv'
             logger.info(f"🔍 Looking for: {file_path}")
@@ -295,22 +288,47 @@ class TakealotRepricingEngine:
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
                 
-                # ✅ NEW: Check for required columns in new format
-                expected_cols = {"offer_id", "product_url", "min_price", "max_price"}
-                missing = expected_cols - set(df.columns)
-                if missing:
-                    logger.error(f"❌ Missing columns in CSV: {missing}")
-                    logger.error(f"❌ Found columns: {list(df.columns)}")
+                # 🎯 FLEXIBLE COLUMN MAPPING - handle different column names
+                column_mapping = {}
+                
+                # Map possible column names to expected names
+                possible_columns = {
+                    'offer_id': ['offer_id', 'OfferID', 'offerid', 'id', 'ID'],
+                    'product_url': ['product_url', 'ProductURL', 'url', 'URL', 'link'],
+                    'min_price': ['min_price', 'MinPrice', 'minprice', 'min', 'Min'],
+                    'max_price': ['max_price', 'MaxPrice', 'maxprice', 'max', 'Max']
+                }
+                
+                # Find which columns exist in the CSV
+                actual_columns = list(df.columns)
+                logger.info(f"📋 Actual CSV columns: {actual_columns}")
+                
+                for expected_col, possible_names in possible_columns.items():
+                    for possible_name in possible_names:
+                        if possible_name in actual_columns:
+                            column_mapping[expected_col] = possible_name
+                            logger.info(f"✅ Mapped {possible_name} → {expected_col}")
+                            break
+                
+                # Check if we found all required columns
+                missing_columns = set(possible_columns.keys()) - set(column_mapping.keys())
+                if missing_columns:
+                    logger.error(f"❌ Missing columns after mapping: {missing_columns}")
+                    logger.error(f"❌ Available columns: {actual_columns}")
                     return {}
                 
-                logger.info(f"✅ Loaded CSV successfully with {len(df)} rows and columns {list(df.columns)}")
-
+                logger.info(f"✅ Column mapping successful: {column_mapping}")
+                logger.info(f"✅ Loaded CSV with {len(df)} rows")
+                
                 config_dict = {}
                 plid_extraction_stats = {"success": 0, "failed": 0}
                 
                 for _, row in df.iterrows():
-                    offer_id = str(row["offer_id"])
-                    product_url = row["product_url"]
+                    # Use the mapped column names
+                    offer_id = str(row[column_mapping['offer_id']])
+                    product_url = row[column_mapping['product_url']]
+                    min_price = float(row[column_mapping['min_price']])
+                    max_price = float(row[column_mapping['max_price']])
                     
                     # Extract PLID from URL
                     plid = self.price_monitor._extract_plid_from_url(product_url)
@@ -322,19 +340,18 @@ class TakealotRepricingEngine:
                         logger.warning(f"⚠️ Could not extract PLID for {offer_id} from URL: {product_url}")
                     
                     config_dict[offer_id] = {
-                        "min_price": float(row["min_price"]),
-                        "max_price": float(row["max_price"]),
+                        "min_price": min_price,
+                        "max_price": max_price,
                         "product_url": product_url,
-                        "plid": plid  # Store the extracted PLID
+                        "plid": plid
                     }
 
                 logger.info(f"🎉 SUCCESS: Loaded {len(config_dict)} products into config")
                 logger.info(f"📊 PLID Extraction: {plid_extraction_stats['success']} successful, {plid_extraction_stats['failed']} failed")
-                logger.info(f"🧾 Sample products: {list(config_dict.keys())[:5]}")
-
+                
                 return config_dict
             else:
-                logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
+                logger.error("❌ CRITICAL: products_config.csv NOT FOUND!")
                 return {}
         except Exception as e:
             logger.error(f"❌ CRITICAL ERROR loading product config: {e}")
@@ -973,6 +990,42 @@ def debug_monitoring_health():
         'products_per_minute_estimate': len(engine.product_config) / 30 if monitor.is_monitoring else 0,
         'estimated_completion_time': f"{(len(engine.product_config) * 2) / 3600:.1f} hours" if monitor.is_monitoring else 'N/A'
     })
+
+    # Your existing debug routes...
+
+    @app.route('/debug-monitoring-health')
+    def debug_monitoring_health():
+        # ... existing code
+
+    # ✅ ADD THE DEBUG CSV COLUMNS ENDPOINT RIGHT HERE
+    @app.route('/debug-csv-columns')
+    def debug_csv_columns():
+        """Check exact CSV column names and structure"""
+        try:
+            import pandas as pd
+            
+            # Read CSV without column expectations
+            df = pd.read_csv('products_config.csv')
+            
+            return jsonify({
+                'csv_columns': list(df.columns),
+                'total_rows': len(df),
+                'first_row_data': df.iloc[0].to_dict() if len(df) > 0 else 'empty',
+                'column_count': len(df.columns),
+                'expected_columns': ['offer_id', 'product_url', 'min_price', 'max_price'],
+                'columns_match_expected': set(df.columns) == set(['offer_id', 'product_url', 'min_price', 'max_price'])
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # Your other debug routes continue below...
+    @app.route('/debug-plid-conversion/<product_id>')
+    def debug_plid_conversion(product_id):
+        # ... existing code
+
+    @app.route('/debug-product-info/<offer_id>')
+    def debug_product_info(offer_id):
+        # ... existing code
 
 @app.route('/debug-plid-conversion/<product_id>')
 def debug_plid_conversion(product_id):
