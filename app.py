@@ -988,6 +988,46 @@ def debug_csv_columns():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug-product-loading-version')
+def debug_product_loading_version():
+    """Check which product loading version is running"""
+    try:
+        # Get the source code of the current method
+        import inspect
+        source = inspect.getsource(engine._load_product_config)
+        
+        # Check which version is running
+        if "OfferID" in source and "SellingPrice" in source:
+            version = "OLD VERSION (OfferID, SellingPrice, CostPrice)"
+        elif "offer_id" in source and "product_url" in source:
+            version = "NEW VERSION (offer_id, product_url, min_price, max_price)"
+        else:
+            version = "UNKNOWN VERSION"
+            
+        return jsonify({
+            'product_loading_version': version,
+            'product_config_loaded': len(engine.product_config),
+            'method_source_preview': source[:500]  # First 500 chars
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/force-reload-products')
+def force_reload_products():
+    """Force reload of product configuration"""
+    try:
+        # Re-initialize the engine to reload products
+        global engine
+        engine = TakealotRepricingEngine()
+        
+        return jsonify({
+            'status': 'reloaded',
+            'products_loaded': len(engine.product_config),
+            'sample_products': list(engine.product_config.keys())[:3] if engine.product_config else 'none'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/debug-plid-conversion/<product_id>')
 def debug_plid_conversion(product_id):
     """Test PLID extraction for a product - FIXED VERSION"""
