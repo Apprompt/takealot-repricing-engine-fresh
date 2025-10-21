@@ -277,66 +277,93 @@ class TakealotRepricingEngine:
         logger.info("🚀 Takealot Repricing Engine with PROACTIVE MONITORING Initialized")
 
     def _load_product_config(self):
-        """Load product config with new 4-column format - FIXED VERSION"""
-        try:
-            current_dir = os.getcwd()
-            logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
+    """Load product config with new 4-column format - ENHANCED DEBUG VERSION"""
+    try:
+        current_dir = os.getcwd()
+        logger.info(f"🔍 DEBUG: Current working directory: {current_dir}")
 
-            file_path = 'products_config.csv'
-            logger.info(f"🔍 Looking for: {file_path}")
+        file_path = 'products_config.csv'
+        logger.info(f"🔍 Looking for: {file_path}")
 
-            if os.path.exists(file_path):
+        if os.path.exists(file_path):
+            logger.info("✅ CSV file exists, attempting to read...")
+            
+            # Read CSV with error handling
+            try:
                 df = pd.read_csv(file_path)
-                
-                # ✅ Check for required columns in new format
-                expected_cols = {"offer_id", "product_url", "min_price", "max_price"}
-                actual_cols = set(df.columns)
-                
-                logger.info(f"📋 Actual columns: {actual_cols}")
-                logger.info(f"📋 Expected columns: {expected_cols}")
-                
-                if expected_cols != actual_cols:
-                    logger.error(f"❌ Column mismatch! Expected: {expected_cols}, Got: {actual_cols}")
-                    return {}
-                
-                logger.info(f"✅ Loaded CSV successfully with {len(df)} rows and columns {list(df.columns)}")
+                logger.info(f"✅ CSV read successfully, shape: {df.shape}")
+            except Exception as e:
+                logger.error(f"❌ Failed to read CSV: {e}")
+                return {}
+            
+            # ✅ Check for required columns in new format
+            expected_cols = {"offer_id", "product_url", "min_price", "max_price"}
+            actual_cols = set(df.columns)
+            
+            logger.info(f"📋 Actual columns: {actual_cols}")
+            logger.info(f"📋 Expected columns: {expected_cols}")
+            
+            if expected_cols != actual_cols:
+                logger.error(f"❌ Column mismatch! Expected: {expected_cols}, Got: {actual_cols}")
+                return {}
+            
+            logger.info(f"✅ Column check passed. Loaded CSV with {len(df)} rows")
+            
+            # Check for empty DataFrame
+            if len(df) == 0:
+                logger.error("❌ CSV is empty!")
+                return {}
 
-                config_dict = {}
-                plid_extraction_stats = {"success": 0, "failed": 0}
-                
-                for _, row in df.iterrows():
+            config_dict = {}
+            success_count = 0
+            error_count = 0
+            
+            for index, row in df.iterrows():
+                try:
                     offer_id = str(row["offer_id"])
                     product_url = row["product_url"]
                     
+                    # Basic validation
+                    if pd.isna(offer_id) or pd.isna(product_url):
+                        logger.warning(f"⚠️ Row {index}: Missing offer_id or product_url")
+                        error_count += 1
+                        continue
+                    
                     # Extract PLID from URL
                     plid = self.price_monitor._extract_plid_from_url(product_url)
-                    
-                    if plid:
-                        plid_extraction_stats["success"] += 1
-                    else:
-                        plid_extraction_stats["failed"] += 1
-                        logger.warning(f"⚠️ Could not extract PLID for {offer_id} from URL: {product_url}")
                     
                     config_dict[offer_id] = {
                         "min_price": float(row["min_price"]),
                         "max_price": float(row["max_price"]),
                         "product_url": product_url,
-                        "plid": plid  # Store the extracted PLID
+                        "plid": plid
                     }
+                    success_count += 1
+                    
+                    # Log first few successes
+                    if success_count <= 3:
+                        logger.info(f"✅ Loaded product {success_count}: {offer_id} → {plid}")
+                        
+                except Exception as e:
+                    error_count += 1
+                    if error_count <= 3:  # Log first few errors
+                        logger.error(f"❌ Error loading row {index}: {e}")
+                        logger.error(f"❌ Row data: {row.to_dict()}")
 
-                logger.info(f"🎉 SUCCESS: Loaded {len(config_dict)} products into config")
-                logger.info(f"📊 PLID Extraction: {plid_extraction_stats['success']} successful, {plid_extraction_stats['failed']} failed")
-                logger.info(f"🧾 Sample products: {list(config_dict.keys())[:5]}")
-
-                return config_dict
-            else:
-                logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
-                return {}
-        except Exception as e:
-            logger.error(f"❌ CRITICAL ERROR loading product config: {e}")
-            import traceback
-            logger.error(f"❌ Stack trace: {traceback.format_exc()}")
+            logger.info(f"🎉 FINAL RESULT: Successfully loaded {success_count} products, {error_count} errors")
+            
+            if success_count == 0:
+                logger.error("❌ CRITICAL: No products were loaded successfully!")
+                
+            return config_dict
+        else:
+            logger.error("❌ CRITICAL: products_config.csv NOT FOUND in deployment!")
             return {}
+    except Exception as e:
+        logger.error(f"❌ CRITICAL ERROR in product loading: {e}")
+        import traceback
+        logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+        return {}
 
     def start_background_monitoring(self):
         """Start monitoring all configured products"""
@@ -1011,6 +1038,33 @@ def debug_product_loading_version():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/debug-product-loading-version')
+def debug_product_loading_version():
+    # ... existing code
+
+# ✅ ADD THIS RIGHT HERE
+@app.route('/debug-csv-first-rows')
+def debug_csv_first_rows():
+    """Check the first few rows of the CSV directly"""
+    try:
+        import pandas as pd
+        
+        df = pd.read_csv('products_config.csv')
+        
+        # Get first 3 rows as dict
+        first_rows = []
+        for i in range(min(3, len(df))):
+            first_rows.append(df.iloc[i].to_dict())
+        
+        return jsonify({
+            'total_rows': len(df),
+            'first_3_rows': first_rows,
+            'column_dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()}
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/force-reload-products')
 def force_reload_products():
