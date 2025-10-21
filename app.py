@@ -991,41 +991,26 @@ def debug_monitoring_health():
         'estimated_completion_time': f"{(len(engine.product_config) * 2) / 3600:.1f} hours" if monitor.is_monitoring else 'N/A'
     })
 
-    # Your existing debug routes...
-
-    @app.route('/debug-monitoring-health')
-    def debug_monitoring_health():
-        # ... existing code
-
-    # ✅ ADD THE DEBUG CSV COLUMNS ENDPOINT RIGHT HERE
-    @app.route('/debug-csv-columns')
-    def debug_csv_columns():
-        """Check exact CSV column names and structure"""
-        try:
-            import pandas as pd
-            
-            # Read CSV without column expectations
-            df = pd.read_csv('products_config.csv')
-            
-            return jsonify({
-                'csv_columns': list(df.columns),
-                'total_rows': len(df),
-                'first_row_data': df.iloc[0].to_dict() if len(df) > 0 else 'empty',
-                'column_count': len(df.columns),
-                'expected_columns': ['offer_id', 'product_url', 'min_price', 'max_price'],
-                'columns_match_expected': set(df.columns) == set(['offer_id', 'product_url', 'min_price', 'max_price'])
-            })
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
-    # Your other debug routes continue below...
-    @app.route('/debug-plid-conversion/<product_id>')
-    def debug_plid_conversion(product_id):
-        # ... existing code
-
-    @app.route('/debug-product-info/<offer_id>')
-    def debug_product_info(offer_id):
-        # ... existing code
+# ✅ ADD THE DEBUG CSV COLUMNS ENDPOINT RIGHT HERE
+@app.route('/debug-csv-columns')
+def debug_csv_columns():
+    """Check exact CSV column names and structure"""
+    try:
+        import pandas as pd
+        
+        # Read CSV without column expectations
+        df = pd.read_csv('products_config.csv')
+        
+        return jsonify({
+            'csv_columns': list(df.columns),
+            'total_rows': len(df),
+            'first_row_data': df.iloc[0].to_dict() if len(df) > 0 else 'empty',
+            'column_count': len(df.columns),
+            'expected_columns': ['offer_id', 'product_url', 'min_price', 'max_price'],
+            'columns_match_expected': set(df.columns) == set(['offer_id', 'product_url', 'min_price', 'max_price'])
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/debug-plid-conversion/<product_id>')
 def debug_plid_conversion(product_id):
