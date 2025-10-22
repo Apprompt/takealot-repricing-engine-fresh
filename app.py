@@ -1117,6 +1117,295 @@ def stop_monitoring():
     engine.stop_monitoring()
     return jsonify({'status': 'monitoring_stopped'})
 
+@app.route('/dashboard')
+def dashboard():
+    """Web dashboard for monitoring repricing engine"""
+    html = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Takealot Repricing Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            color: #333;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+        
+        .stat-value {
+            color: #333;
+            font-size: 36px;
+            font-weight: bold;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .status-active {
+            background: #10b981;
+            color: white;
+        }
+        
+        .status-inactive {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .table-container {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            background: #f3f4f6;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            font-size: 14px;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #4b5563;
+        }
+        
+        tr:hover {
+            background: #f9fafb;
+        }
+        
+        .price {
+            font-weight: 600;
+            color: #059669;
+        }
+        
+        .timestamp {
+            color: #9ca3af;
+            font-size: 13px;
+        }
+        
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: background 0.3s;
+        }
+        
+        .refresh-btn:hover {
+            background: #5568d3;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Takealot Repricing Dashboard</h1>
+            <p class="subtitle">Real-time monitoring of your automated repricing engine</p>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Monitoring Status</div>
+                <div class="stat-value" id="monitoring-status">Loading...</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Products Configured</div>
+                <div class="stat-value" id="total-products">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Prices in Database</div>
+                <div class="stat-value" id="prices-stored">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Last Updated</div>
+                <div class="stat-value" style="font-size: 20px;" id="last-update">Never</div>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <h2 style="margin-bottom: 20px; color: #333;">Recent Price Updates</h2>
+            <div id="prices-table">
+                <div class="loading">Loading recent prices...</div>
+            </div>
+            <button class="refresh-btn" onclick="loadData()">🔄 Refresh Data</button>
+        </div>
+    </div>
+    
+    <script>
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+        
+        function formatTimeAgo(timestamp) {
+            const now = new Date();
+            const then = new Date(timestamp);
+            const diffMs = now - then;
+            const diffMins = Math.floor(diffMs / 60000);
+            
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins} min ago`;
+            const diffHours = Math.floor(diffMins / 60);
+            if (diffHours < 24) return `${diffHours} hours ago`;
+            const diffDays = Math.floor(diffHours / 24);
+            return `${diffDays} days ago`;
+        }
+        
+        async function loadData() {
+            try {
+                // Load monitoring status
+                const statusRes = await fetch('/monitoring/status');
+                const status = await statusRes.json();
+                
+                document.getElementById('monitoring-status').innerHTML = 
+                    status.monitoring_active 
+                    ? '<span class="status-badge status-active">● ACTIVE</span>'
+                    : '<span class="status-badge status-inactive">● STOPPED</span>';
+                
+                document.getElementById('total-products').textContent = 
+                    status.total_products_configured.toLocaleString();
+                
+                document.getElementById('prices-stored').textContent = 
+                    status.prices_in_database.toLocaleString();
+                
+                document.getElementById('last-update').textContent = 
+                    status.last_price_update ? formatTimeAgo(status.last_price_update) : 'Never';
+                
+                // Load recent prices
+                const pricesRes = await fetch('/monitoring/prices');
+                const prices = await pricesRes.json();
+                
+                if (prices.stored_prices.length === 0) {
+                    document.getElementById('prices-table').innerHTML = 
+                        '<div class="loading">No prices stored yet. Monitoring is running...</div>';
+                } else {
+                    let tableHtml = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Offer ID</th>
+                                    <th>Competitor Price</th>
+                                    <th>Last Updated</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    prices.stored_prices.slice(0, 50).forEach(price => {
+                        tableHtml += `
+                            <tr>
+                                <td><strong>${price.offer_id}</strong></td>
+                                <td class="price">R ${price.competitor_price.toFixed(2)}</td>
+                                <td class="timestamp">${formatTimestamp(price.last_updated)}</td>
+                                <td>${price.source}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    tableHtml += '</tbody></table>';
+                    document.getElementById('prices-table').innerHTML = tableHtml;
+                }
+                
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('prices-table').innerHTML = 
+                    '<div class="loading">Error loading data. Please refresh the page.</div>';
+            }
+        }
+        
+        // Load data on page load
+        loadData();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadData, 30000);
+    </script>
+</body>
+</html>
+    '''
+    return html
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting app on port {port}")
