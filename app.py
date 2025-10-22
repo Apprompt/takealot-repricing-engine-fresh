@@ -102,6 +102,146 @@ class PriceMonitor:
             logger.error(f"❌ Failed to get stored price: {e}")
             return None
 
+    def start_monitoring(self, product_list, interval_minutes=MONITORING_INTERVAL_MINUTES):
+        """Start background monitoring of all products"""
+        if self.is_monitoring:
+            logger.info("📊 Monitoring already running")
+            return
+        
+        self.is_monitoring = True
+        self.monitoring_thread = threading.Thread(
+            target=self._monitoring_loop,
+            args=(product_list, interval_minutes),
+            daemon=True
+        )
+        self.monitoring_thread.start()
+        logger.info(f"🚀 Started background monitoring for {len(product_list)} products")
+        logger.info(f"📅 Will scrape every {interval_minutes} minutes")
+        logger.info(f"⏱️ Estimated time per cycle: {(len(product_list) * 2) / 60:.1f} minutes")
+    
+    def _monitoring_loop(self, product_list, interval_minutes):
+        """Background loop to monitor all products"""
+        while self.is_monitoring:
+            try:
+                logger.info("="*60)
+                logger.info(f"🔄 MONITORING CYCLE STARTED for {len(product_list)} products")
+                logger.info("="*60)
+                
+                success_count = 0
+                error_count = 0
+                start_time = time.time()
+                
+                for idx, offer_id in enumerate(product_list):
+                    if not self.is_monitoring:
+                        break
+                    
+                    try:
+                        # Progress indicator
+                        if (idx + 1) % 100 == 0:
+                            logger.info(f"📊 Progress: {idx + 1}/{len(product_list)} products")
+                        
+                        # Scrape competitor price
+                        competitor_price = self._direct_scrape_price(offer_id)
+                        
+                        if competitor_price and competitor_price > 0 and competitor_price != "we_own_buybox":
+                            self.store_competitor_price(offer_id, competitor_price, "background_monitor")
+                            success_count += 1
+                        elif competitor_price == "we_own_buybox":
+                            # Store special marker for buybox ownership
+                            self.store_competitor_price(offer_id, -1, "we_own_buybox")
+                            success_count += 1
+                        else:
+                            error_count += 1
+                        
+                        # Rate limiting: 2 seconds between requests
+                        time.sleep(2)
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Monitoring failed for {offer_id}: {e}")
+                        error_count += 1
+                        time.sleep(5)
+                
+                elapsed_time = time.time() - start_time
+                
+                logger.info("="*60)
+                logger.info(f"✅ MONITORING CYCLE COMPLETED")
+                logger.info(f"   Success: {success_count}/{len(product_list)}")
+                logger.info(f"   Errors: {error_count}")
+                logger.info(f"   Time taken: {elapsed_time/60:.1f} minutes")
+                logger.info(f"⏰ Next cycle in {interval_minutes} minutes")
+                logger.info("="*60)
+                
+                if self.is_monitoring:
+                    time.sleep(interval_minutes * 60)
+                    
+            except Exception as e:
+                logger.error(f"❌ Monitoring loop error: {e}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                if self.is_monitoring:
+                    time.sleep(60)
+
+    def _direct_scrape_price(self, offer_id):
+        """Direct price scraping for monitoring - uses the same logic as real scraping"""
+        try:
+            if not self.engine_ref:
+                logger.warning(f"⚠️ No engine reference for {offer_id}")
+                return None
+                
+            product_info = self.engine_ref.product_config.get(offer_id, {})
+            plid = product_info.get("plid")
+            
+            if not plid:
+                logger.warning(f"⚠️ No PLID for {offer_id}")
+                return None
+            
+            # Call Takealot API
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": f"https://www.takealot.com/{plid.lower()}",
+            }
+            
+            response = requests.get(api_url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                logger.debug(f"⚠️ API {response.status_code} for {offer_id}")
+                return None
+            
+            data = response.json()
+            
+            # Extract prices - Takealot returns prices in RANDS
+            price_candidates = []
+            
+            # Buybox items (most reliable)
+            buybox = data.get("buybox", {})
+            if buybox:
+                items = buybox.get("items", [])
+                for item in items:
+                    price = item.get("price")
+                    if price and price > 0:
+                        price_rand = float(price)
+                        price_candidates.append(price_rand)
+            
+            if price_candidates:
+                lowest_price = min(price_candidates)
+                return lowest_price
+            
+            return None
+                
+        except Exception as e:
+            logger.debug(f"⚠️ Scrape failed for {offer_id}: {e}")
+            return None
+
+    def stop_monitoring(self):
+        """Stop background monitoring"""
+        self.is_monitoring = False
+        if self.monitoring_thread:
+            self.monitoring_thread.join(timeout=10)
+        logger.info("🛑 Background monitoring stopped")
+
     def _direct_scrape_price(self, offer_id):
         """Direct price scraping for monitoring - uses the same logic as real scraping"""
         try:
