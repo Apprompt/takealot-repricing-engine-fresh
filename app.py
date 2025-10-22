@@ -102,20 +102,58 @@ class PriceMonitor:
             logger.error(f"❌ Failed to get stored price: {e}")
             return None
 
-    def _extract_plid_from_url(self, product_url):
-        """Extract PLID from Takealot URL"""
+    def _direct_scrape_price(self, offer_id):
+        """Direct price scraping for monitoring - uses the same logic as real scraping"""
         try:
-            plid_match = re.search(r'PLID(\d+)', product_url, re.IGNORECASE)
-            if plid_match:
-                plid = f"PLID{plid_match.group(1)}"
-                logger.debug(f"✅ Extracted PLID: {plid}")
-                return plid
+            if not self.engine_ref:
+                logger.warning(f"⚠️ No engine reference for {offer_id}")
+                return None
+                
+            product_info = self.engine_ref.product_config.get(offer_id, {})
+            plid = product_info.get("plid")
             
-            logger.warning(f"⚠️ Could not extract PLID from URL: {product_url}")
+            if not plid:
+                logger.warning(f"⚠️ No PLID for {offer_id}")
+                return None
+            
+            # Call Takealot API
+            api_url = f"https://api.takealot.com/rest/v-1-0-0/product-details/{plid}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": f"https://www.takealot.com/{plid.lower()}",
+            }
+            
+            response = requests.get(api_url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                logger.debug(f"⚠️ API {response.status_code} for {offer_id}")
+                return None
+            
+            data = response.json()
+            
+            # Extract prices - Takealot returns prices in RANDS
+            price_candidates = []
+            
+            # Buybox items (most reliable)
+            buybox = data.get("buybox", {})
+            if buybox:
+                items = buybox.get("items", [])
+                for item in items:
+                    price = item.get("price")
+                    if price and price > 0:
+                        price_rand = float(price)
+                        price_candidates.append(price_rand)
+            
+            if price_candidates:
+                lowest_price = min(price_candidates)
+                return lowest_price
+            
             return None
-            
+                
         except Exception as e:
-            logger.error(f"❌ URL parsing failed for {product_url}: {e}")
+            logger.debug(f"⚠️ Scrape failed for {offer_id}: {e}")
             return None
 
 class TakealotRepricingEngine:
@@ -517,6 +555,11 @@ try:
     logger.info("🔧 Creating engine instance...")
     engine = TakealotRepricingEngine()
     logger.info("✅ Engine created successfully")
+    
+    # Start background monitoring automatically
+    logger.info("🚀 Initiating background monitoring...")
+    engine.start_background_monitoring()
+    
 except Exception as e:
     logger.error(f"❌ FATAL: Engine creation failed: {e}")
     import traceback
@@ -823,6 +866,87 @@ def debug_api_structure(offer_id):
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
+
+@app.route('/monitoring/status')
+def monitoring_status():
+    """Check monitoring system status"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    try:
+        with sqlite3.connect("price_monitor.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*), MAX(last_updated) FROM competitor_prices')
+            result = cursor.fetchone()
+            total_prices, last_updated = result
+    except:
+        total_prices, last_updated = 0, None
+    
+    return jsonify({
+        'monitoring_active': engine.price_monitor.is_monitoring,
+        'thread_alive': engine.price_monitor.monitoring_thread.is_alive() if engine.price_monitor.monitoring_thread else False,
+        'total_products_configured': len(engine.product_config),
+        'prices_in_database': total_prices,
+        'last_price_update': last_updated,
+        'monitoring_interval': '30 minutes',
+        'estimated_cycle_time': f"{(len(engine.product_config) * 2) / 60:.1f} minutes"
+    })
+
+@app.route('/monitoring/prices')
+def monitoring_prices():
+    """Get recent stored competitor prices"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    try:
+        with sqlite3.connect("price_monitor.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT offer_id, competitor_price, last_updated, source 
+                FROM competitor_prices 
+                ORDER BY last_updated DESC 
+                LIMIT 100
+            ''')
+            results = cursor.fetchall()
+        
+        prices = []
+        for row in results:
+            prices.append({
+                'offer_id': row[0],
+                'competitor_price': row[1],
+                'last_updated': row[2],
+                'source': row[3]
+            })
+        
+        return jsonify({
+            'stored_prices': prices,
+            'count': len(prices),
+            'showing': 'last 100 prices'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/monitoring/start')
+def start_monitoring():
+    """Manually start monitoring"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    engine.start_background_monitoring()
+    return jsonify({
+        'status': 'monitoring_started',
+        'products': len(engine.product_config),
+        'interval': '30 minutes'
+    })
+
+@app.route('/monitoring/stop')
+def stop_monitoring():
+    """Manually stop monitoring"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    engine.stop_monitoring()
+    return jsonify({'status': 'monitoring_stopped'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
