@@ -365,48 +365,24 @@ class TakealotRepricingEngine:
                 return None
             
             data = response.json()
-            product = data.get("product", {})
             
-            # Extract prices from multiple locations
+            # Extract prices - Takealot returns prices in RANDS (not cents!)
             price_candidates = []
             
-            # Method 1: Buybox price
-            buybox = product.get("buybox", {})
+            # Method 1: Buybox items (most reliable)
+            buybox = data.get("buybox", {})
             if buybox:
-                buybox_price = buybox.get("price")
-                if buybox_price and buybox_price > 0:
-                    price_rand = buybox_price / 100.0
-                    price_candidates.append(price_rand)
-                    logger.info(f"💰 Buybox price: R{price_rand}")
-                
-                # Check if we own the buybox
-                seller_id = buybox.get("seller_id") or buybox.get("seller_name", "")
-                if seller_id and (str(seller_id) == "29844311" or "allbats" in str(seller_id).lower()):
-                    logger.info("🎉 WE OWN THE BUYBOX!")
-                    return "we_own_buybox"
-            
-            # Method 2: Core price
-            core = product.get("core", {})
-            if core:
-                core_price = core.get("price") or core.get("current_price")
-                if isinstance(core_price, dict):
-                    selling_price = core_price.get("selling_price") or core_price.get("amount")
-                    if selling_price and selling_price > 0:
-                        price_rand = selling_price / 100.0
+                items = buybox.get("items", [])
+                for item in items:
+                    price = item.get("price")
+                    if price and price > 0:
+                        price_rand = float(price)  # Already in Rands!
                         price_candidates.append(price_rand)
-                        logger.info(f"💰 Core price: R{price_rand}")
-                elif core_price and core_price > 0:
-                    price_rand = core_price / 100.0
-                    price_candidates.append(price_rand)
-                    logger.info(f"💰 Core price: R{price_rand}")
+                        logger.info(f"💰 Buybox item price: R{price_rand}")
             
-            # Method 3: Direct price fields
-            for field in ["price", "selling_price", "current_price"]:
-                price_val = product.get(field)
-                if price_val and price_val > 0:
-                    price_rand = price_val / 100.0
-                    price_candidates.append(price_rand)
-                    logger.info(f"💰 {field}: R{price_rand}")
+            # Method 2: Check if we own the buybox (would need seller info)
+            # Note: The API doesn't clearly show seller_id in the buybox for this product
+            # We'll need to handle this in the webhook when we see our own offer_id
             
             if price_candidates:
                 lowest_price = min(price_candidates)
