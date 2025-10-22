@@ -550,6 +550,21 @@ class TakealotRepricingEngine:
         logger.warning(f"🔄 Using fallback price: R{fallback_price}")
         return float(fallback_price)
 
+    def start_background_monitoring(self):
+        """Start monitoring all configured products"""
+        if not self.product_config:
+            logger.warning("⚠️ No products configured for monitoring")
+            return
+        
+        product_list = list(self.product_config.keys())
+        logger.info(f"🚀 Starting background monitoring for {len(product_list)} products")
+        self.price_monitor.start_monitoring(product_list, interval_minutes=30)
+
+    def stop_monitoring(self):
+        """Stop background monitoring"""
+        if self.price_monitor:
+            self.price_monitor.stop_monitoring()
+
 # Initialize the engine - WRAPPED IN TRY-CATCH
 try:
     logger.info("🔧 Creating engine instance...")
