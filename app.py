@@ -556,16 +556,30 @@ try:
     engine = TakealotRepricingEngine()
     logger.info("✅ Engine created successfully")
     
-    # Start background monitoring automatically
-    logger.info("🚀 Initiating background monitoring...")
-    engine.start_background_monitoring()
-    
 except Exception as e:
     logger.error(f"❌ FATAL: Engine creation failed: {e}")
     import traceback
     logger.error(f"📍 Traceback: {traceback.format_exc()}")
     # Create a dummy engine so app can at least start
     engine = None
+
+# Start monitoring in a separate thread after a delay
+def delayed_monitoring_start():
+    """Start monitoring after a delay to ensure engine is ready"""
+    time.sleep(10)  # Wait 10 seconds for app to fully start
+    if engine and engine.product_config:
+        logger.info("🚀 Starting background monitoring...")
+        try:
+            engine.start_background_monitoring()
+            logger.info("✅ Background monitoring started successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to start monitoring: {e}")
+    else:
+        logger.error("❌ Cannot start monitoring: Engine not initialized or no products loaded")
+
+# Start monitoring thread
+monitoring_startup_thread = threading.Thread(target=delayed_monitoring_start, daemon=True)
+monitoring_startup_thread.start()
 
 @app.route('/')
 def home():
