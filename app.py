@@ -1470,6 +1470,18 @@ def dashboard():
     '''
     return html
 
+@app.route('/debug-api-key')
+def debug_api_key():
+    """Check if API key is configured"""
+    api_key = os.getenv('TAKEALOT_API_KEY')
+    
+    return jsonify({
+        'api_key_exists': bool(api_key),
+        'api_key_length': len(api_key) if api_key else 0,
+        'api_key_preview': api_key[:10] + '...' if api_key and len(api_key) > 10 else 'NOT_SET',
+        'all_env_vars': list(os.environ.keys())
+    })
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting app on port {port}")
