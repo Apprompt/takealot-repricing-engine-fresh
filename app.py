@@ -52,6 +52,20 @@ class PriceMonitor:
                         source TEXT
                     )
                 ''')
+                
+                # New table for tracking YOUR price changes
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS my_price_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        offer_id TEXT NOT NULL,
+                        old_price REAL,
+                        new_price REAL,
+                        competitor_price REAL,
+                        reason TEXT,
+                        success BOOLEAN,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
                 conn.commit()
             logger.info("✅ Price monitoring database initialized")
         except Exception as e:
@@ -241,6 +255,21 @@ class PriceMonitor:
         if self.monitoring_thread:
             self.monitoring_thread.join(timeout=10)
         logger.info("🛑 Background monitoring stopped")
+
+    def log_price_change(self, offer_id, old_price, new_price, competitor_price, reason, success):
+        """Log YOUR price changes to database"""
+        try:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO my_price_history 
+                    (offer_id, old_price, new_price, competitor_price, reason, success, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (str(offer_id), old_price, new_price, competitor_price, reason, success, datetime.now().isoformat()))
+                conn.commit()
+            logger.info(f"📝 Logged price change: {offer_id} R{old_price}→R{new_price}")
+        except Exception as e:
+            logger.error(f"❌ Failed to log price change: {e}")
 
     def _direct_scrape_price(self, offer_id):
         """Direct price scraping for monitoring - uses the same logic as real scraping"""
@@ -859,6 +888,17 @@ def handle_price_change():
         
         if needs_update:
             update_success = engine.update_price(offer_id, optimal_price)
+            
+            # Log the price change
+            reason = "competitor_below_min" if competitor_price != "we_own_buybox" and competitor_price < engine.get_product_thresholds(offer_id)[0] else "undercut_competitor"
+            engine.price_monitor.log_price_change(
+                offer_id=offer_id,
+                old_price=my_current_price,
+                new_price=optimal_price,
+                competitor_price=competitor_price if competitor_price != "we_own_buybox" else 0,
+                reason=reason,
+                success=update_success
+            )
         
         return jsonify({
             'status': 'updated' if update_success else 'no_change',
@@ -1120,6 +1160,58 @@ def monitoring_prices():
             'stored_prices': prices,
             'count': len(prices),
             'showing': 'last 100 prices'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/my-price-history')
+def my_price_history():
+    """Get YOUR price change history"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    try:
+        limit = request.args.get('limit', 100, type=int)
+        offer_id = request.args.get('offer_id')  # Optional filter by product
+        
+        with sqlite3.connect("price_monitor.db") as conn:
+            cursor = conn.cursor()
+            
+            if offer_id:
+                cursor.execute('''
+                    SELECT offer_id, old_price, new_price, competitor_price, reason, success, timestamp
+                    FROM my_price_history 
+                    WHERE offer_id = ?
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                ''', (offer_id, limit))
+            else:
+                cursor.execute('''
+                    SELECT offer_id, old_price, new_price, competitor_price, reason, success, timestamp
+                    FROM my_price_history 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                ''', (limit,))
+            
+            results = cursor.fetchall()
+        
+        history = []
+        for row in results:
+            history.append({
+                'offer_id': row[0],
+                'old_price': row[1],
+                'new_price': row[2],
+                'competitor_price': row[3],
+                'reason': row[4],
+                'success': bool(row[5]),
+                'timestamp': row[6],
+                'price_change': row[2] - row[1]
+            })
+        
+        return jsonify({
+            'price_changes': history,
+            'count': len(history),
+            'showing': f'last {limit} price changes' + (f' for {offer_id}' if offer_id else '')
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1469,18 +1561,6 @@ def dashboard():
 </html>
     '''
     return html
-
-@app.route('/debug-api-key')
-def debug_api_key():
-    """Check if API key is configured"""
-    api_key = os.getenv('TAKEALOT_API_KEY')
-    
-    return jsonify({
-        'api_key_exists': bool(api_key),
-        'api_key_length': len(api_key) if api_key else 0,
-        'api_key_preview': api_key[:10] + '...' if api_key and len(api_key) > 10 else 'NOT_SET',
-        'all_env_vars': list(os.environ.keys())
-    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
