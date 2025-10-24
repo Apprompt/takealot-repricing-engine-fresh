@@ -455,15 +455,16 @@ class TakealotRepricingEngine:
             return None
 
     def get_product_thresholds(self, offer_id):
-        """Get min_price and max_price for specific product"""
+        """Get min_price and max_price for specific product - NO FALLBACK"""
         offer_id_str = str(offer_id)
 
         if offer_id_str in self.product_config:
             config = self.product_config[offer_id_str]
-            return config.get('min_price', 500), config.get('max_price', 700)
+            return config.get('min_price'), config.get('max_price')
         else:
-            logger.warning(f"⚠️ No config for '{offer_id_str}' - using fallback")
-            return 500, 700
+            # 🚨 NO FALLBACK - This should never be called for unknown products
+            logger.error(f"🚨 CRITICAL: get_product_thresholds called for unknown offer_id '{offer_id_str}'")
+            raise ValueError(f"Product {offer_id_str} not in configuration")
 
     def get_competitor_price_instant(self, offer_id):
         """INSTANT competitor price lookup"""
@@ -476,8 +477,13 @@ class TakealotRepricingEngine:
         return real_time_price, 'real_time_scraping'
 
     def get_competitor_price(self, offer_id):
-        """Get competitor price with fallback"""
+        """Get competitor price with fallback - NO SIMULATION FOR UNKNOWN PRODUCTS"""
         try:
+            # 🚨 SAFETY: Only process products in config
+            if str(offer_id) not in self.product_config:
+                logger.error(f"🚨 REJECTED: {offer_id} not in product config")
+                return None
+            
             # 1. Check stored price first
             stored_price = self.price_monitor.get_competitor_price(offer_id)
             if stored_price is not None:
@@ -490,7 +496,7 @@ class TakealotRepricingEngine:
                 logger.info(f"💾 Using cached price for {offer_id}: R{cached_price}")
                 return cached_price
             
-            # 3. Try REAL scraping
+            # 3. Try REAL scraping ONLY
             logger.info(f"🌐 Attempting REAL scraping for {offer_id}")
             real_price = self._scrape_real_competitor_price(offer_id)
             
@@ -502,15 +508,13 @@ class TakealotRepricingEngine:
             elif real_price == "we_own_buybox":
                 return "we_own_buybox"
             
-            # 4. Fallback to simulation
-            logger.warning(f"⚠️ Real scraping failed for {offer_id}, using simulation")
-            simulated_price = self._simulate_scraping(offer_id)
-            self._cache_price(offer_id, simulated_price)
-            return simulated_price
+            # 4. NO SIMULATION - Return None if can't get real price
+            logger.error(f"🚨 Cannot get real competitor price for {offer_id}")
+            return None
             
         except Exception as e:
             logger.error(f"❌ All price methods failed: {e}")
-            return self._get_fallback_price(offer_id)
+            return None
 
     def _scrape_real_competitor_price(self, offer_id):
         """Scrape actual competitor price from Takealot API"""
@@ -804,6 +808,16 @@ def handle_price_change():
         if not offer_id:
             return jsonify({'error': 'Missing offer_id'}), 400
         
+        # 🚨 SAFETY CHECK 1: Reject unknown products
+        if str(offer_id) not in engine.product_config:
+            logger.error(f"🚨 REJECTED: offer_id '{offer_id}' NOT in products_config.csv")
+            return jsonify({
+                'status': 'rejected',
+                'reason': 'offer_id not in configuration',
+                'offer_id': offer_id,
+                'action': 'Add this product to products_config.csv to enable repricing'
+            }), 400
+        
         # Extract current price
         values_changed = webhook_data.get('values_changed', '{}')
         my_current_price = 500  # Default
@@ -820,6 +834,21 @@ def handle_price_change():
         
         # Get competitor price
         competitor_price, source = engine.get_competitor_price_instant(offer_id)
+        
+        # 🚨 SAFETY CHECK 2: Don't use simulated prices
+        if source == 'real_time_scraping' and (not competitor_price or competitor_price == "we_own_buybox"):
+            # Try one more time to get real price
+            logger.warning(f"⚠️ No valid competitor price for {offer_id}, attempting real scrape")
+            competitor_price = engine._scrape_real_competitor_price(offer_id)
+            
+            if not competitor_price or competitor_price <= 0:
+                logger.error(f"🚨 REJECTED: Cannot get real competitor price for {offer_id}")
+                return jsonify({
+                    'status': 'rejected',
+                    'reason': 'cannot_get_real_competitor_price',
+                    'offer_id': offer_id,
+                    'action': 'Wait for next monitoring cycle to scrape real price'
+                }), 400
         
         # Calculate optimal price
         optimal_price = engine.calculate_optimal_price(my_current_price, competitor_price, offer_id)
@@ -1116,6 +1145,41 @@ def stop_monitoring():
     
     engine.stop_monitoring()
     return jsonify({'status': 'monitoring_stopped'})
+
+@app.route('/cache/clear')
+def clear_cache():
+    """Clear price cache"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    cache_size = len(engine.price_cache)
+    engine.price_cache = {}
+    
+    return jsonify({
+        'status': 'cache_cleared',
+        'items_removed': cache_size,
+        'message': 'All cached prices removed'
+    })
+
+@app.route('/cache/status')
+def cache_status():
+    """Check cache status"""
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 500
+    
+    cached_items = []
+    for offer_id, data in engine.price_cache.items():
+        age_seconds = time.time() - data['timestamp']
+        cached_items.append({
+            'offer_id': offer_id,
+            'price': data['price'],
+            'age_minutes': round(age_seconds / 60, 1)
+        })
+    
+    return jsonify({
+        'total_cached': len(cached_items),
+        'cached_items': cached_items[:50]  # Show first 50
+    })
 
 @app.route('/dashboard')
 def dashboard():
