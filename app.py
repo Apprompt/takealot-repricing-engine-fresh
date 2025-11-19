@@ -837,19 +837,19 @@ def handle_price_change():
         if not offer_id:
             return jsonify({'error': 'Missing offer_id'}), 400
         
-        # 🚨 SAFETY CHECK 1: Reject unknown products
+        # 🚨 SAFETY CHECK 1: Reject unknown products (but return 200 OK to Takealot)
         if str(offer_id) not in engine.product_config:
-            logger.error(f"🚨 REJECTED: offer_id '{offer_id}' NOT in products_config.csv")
+            logger.warning(f"⏭️ SKIPPED: offer_id '{offer_id}' not in products_config.csv")
             return jsonify({
-                'status': 'rejected',
+                'status': 'skipped',
                 'reason': 'offer_id not in configuration',
                 'offer_id': offer_id,
-                'action': 'Add this product to products_config.csv to enable repricing'
-            }), 400
+                'message': 'Product not configured for repricing - no action taken'
+            }), 200  # ✅ Return 200 OK instead of 400
         
         # Extract current price
         values_changed = webhook_data.get('values_changed', '{}')
-        my_current_price = 500  # Default
+        my_current_price = None  # Changed from 500 to None
         
         try:
             if isinstance(values_changed, str):
@@ -857,9 +857,19 @@ def handle_price_change():
             else:
                 values_dict = values_changed
             
-            my_current_price = values_dict.get('selling_price', {}).get('new_value', 500)
-        except:
-            pass
+            my_current_price = values_dict.get('selling_price', {}).get('new_value')
+        except Exception as e:
+            logger.error(f"❌ Failed to parse webhook data: {e}")
+        
+        # 🚨 SAFETY CHECK: Skip if we can't determine current price
+        if my_current_price is None:
+            logger.warning(f"⏭️ SKIPPED: Could not extract current price from webhook for {offer_id}")
+            return jsonify({
+                'status': 'skipped',
+                'reason': 'invalid_webhook_data',
+                'offer_id': offer_id,
+                'message': 'Unable to parse current price from webhook - no action taken'
+            }), 200
         
         # Get competitor price
         competitor_price, source = engine.get_competitor_price_instant(offer_id)
@@ -871,13 +881,13 @@ def handle_price_change():
             competitor_price = engine._scrape_real_competitor_price(offer_id)
             
             if not competitor_price or competitor_price <= 0:
-                logger.error(f"🚨 REJECTED: Cannot get real competitor price for {offer_id}")
+                logger.warning(f"⏭️ SKIPPED: Cannot get real competitor price for {offer_id}")
                 return jsonify({
-                    'status': 'rejected',
+                    'status': 'skipped',
                     'reason': 'cannot_get_real_competitor_price',
                     'offer_id': offer_id,
-                    'action': 'Wait for next monitoring cycle to scrape real price'
-                }), 400
+                    'message': 'Unable to fetch competitor price - no action taken'
+                }), 200  # ✅ Return 200 OK instead of 400
         
         # Calculate optimal price
         optimal_price = engine.calculate_optimal_price(my_current_price, competitor_price, offer_id)
